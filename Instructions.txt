@@ -1,0 +1,7 @@
+Installation Instruction for Windows Systems (8.02.2024, v0.4.3a)
+
+- Install a Version of Python 3.9 from the official Python webpage, make sure it is the 64-bit version
+- Be sure, that the Python folder is located in the %USERPROFILE%\AppData\Local\Programs directory
+- be sure that set_up_labber_hdf5_GUI.bat is in the same directory as all 4 python scripts
+- click on the set_up_labber_hdf5_GUI.bat, it should execute in the windows command line tool
+- after it has finished you can execute the GUI script via clicking on labber_hdf5_viewer.bat
