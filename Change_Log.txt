@@ -14,5 +14,6 @@ changes in v0.4.3a
 - included polynomial background subtraction
 - include median difference background correction
 
+changes in v0.4.4
 
 

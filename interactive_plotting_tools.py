@@ -62,7 +62,7 @@ class InteractiveSlicePlotter:
         self.ax.clear()
         slice_data = self.data[self.current_slice_index, :, :]
 
-        self.ax.imshow(slice_data, cmap='viridis', origin='lower', aspect='auto')
+        self.ax.imshow(slice_data, cmap='viridis', origin='lower', aspect='gouraud')
         self.ax.set_title(f"Slice {self.current_slice_index}")
         self.ax.set_xlabel("X-axis")
         self.ax.set_ylabel("Y-axis")
