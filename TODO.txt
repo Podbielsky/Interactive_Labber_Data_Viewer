@@ -1,0 +1,20 @@
+TODO list for next version:
+- add rate or mean level time calculation and display to functionalities for data with traces (IMPORTANT)
+  - numba will be needed to make it faster as first implementation should be Luccas code
+  - re-write more parts of the code either in cython or fortran, but test windows handling beforehand
+    - think about installation handling if no matching compiler for cython or fortran could be found
+- add snr calc for multi parameter maps based on bimodal gaussian distribution (IMPORTANT)
+  - should be easier than the point before, but you have to think about how the data structure is handled
+- deprecate histogram map function and add functionality of plotting histogram map to trace plotter class
+- deprecate slice plotter as no longer needed (no need for alternatives as functionality already included in trace
+  plotter) (done)
+-? should the calculation of the histogram be done in the HDF5data class or the plotting tool ?
+- add new neon colormap
+- bug fix coral draw read-in (done)
+- add scaling of plotted variables
+- variable range plotting for dedicated areas
+- rescaling of line-plots in the line-cut section should be improved to get better visibility
+(maybe add pastel color scheme if dependecies are not to heavy and current version of matplotlib allows for it)
+(maybe add functionality to read in .npy files with .json file as parameters)
+(maybe add functionality to plot single traces and perform fits on them, should be done after .npy read-in works.
+Should include mulit column read in for hdf5 data and multi-trace selection)

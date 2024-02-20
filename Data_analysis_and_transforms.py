@@ -1,5 +1,8 @@
 import numpy as np
 from scipy import interpolate
+from scipy.ndimage import gaussian_filter1d
+from scipy.signal import find_peaks
+from scipy.optimize import curve_fit
 from scipy.fft import fft2, fftfreq, fftshift
 
 
@@ -124,3 +127,137 @@ def correct_median_diff(imag):
     corrected_data = imag - D
     return corrected_data
 
+
+def gaussian(x, a, mu, sigma):
+    '''
+    :param x: 1d array for x-values
+    :param a: amplitude
+    :param mu: mean
+    :param sigma: standard deviation
+    :return: gaussian peak function a * exp( - (x - mu) ** 2 / (2 * sigma ** 2) wo constant offset
+    '''
+    return a * np.exp(-1 * (x - mu) ** 2 / (2 * sigma ** 2))
+
+def double_gaussian(x, a1, mu1, sigma1, a2, mu2, sigma2, c):
+    '''
+    :param x: 1d array
+    :param a1: amplitude of first gaussian
+    :param mu1: mean of first gaussian
+    :param sigma1: standard deviation of first gaussian
+    :param a2: amplitude of second gaussian
+    :param mu2: mean of second gaussian
+    :param sigma2: standard deviation of second gaussian
+    :param c: constant offset
+    :return: sum of two gaussian functions (see gaussian function)
+    '''
+    return gaussian(x, a1, mu1, sigma1) + gaussian(x, a2, mu2, sigma2) + c
+
+
+def snr_calculation(param):
+    '''
+    :param param: fit parameters of double gaussian in format (a1, mu1, sigma1, a2, mu2, sigma2, c)
+    :return: signal-to-noise ratio according to the formula | mu1 - mu2 | / sqrt( sigma1 ** 2 + sigma2 ** 2)
+    '''
+    return np.abs(param[1] - param[4]) / np.sqrt(param[3] ** 2 + param[6] ** 2)
+
+
+def det_a(snr, m, b):
+    '''
+    :param snr: signal-to-noise
+    :param m: empirical slope for scaling parameter a
+    :param b: empirical offset for scaling parameter a
+    :return:
+    '''
+    return m * snr + b
+
+
+def detect_events_vec(x_data, y_data, thresh_upper, thresh_lower):
+    '''
+    :param x_data: 1d array of times
+    :param y_data: 1d array of detector signals
+    :param thresh_upper: upper threshold for schmidt trigger
+    :param thresh_lower: lower threshold for schmidt trigger
+    :return:
+    '''
+    # make conditions and divide data into points meeting one of those conditions
+    above_upper = y_data > thresh_upper
+    below_lower = y_data < thresh_lower
+
+    # simplify array to values -1,0,1 for the three conditions
+    result = np.zeros_like(y_data)
+    result[above_upper] = 1
+    result[below_lower] = -1
+
+    # use diff to detect state changes and set conditions for state changes
+    x_result = x_data[1:]
+    diff_result = np.diff(result)
+    diff_events = np.nonzero(diff_result)[0]
+    result_events = diff_result[diff_events]
+
+    up_idx = np.where((result_events == 2) | ((result_events == 1) & (np.roll(result_events, -1) == 1)))[0]
+    up_list = diff_events[up_idx]
+
+    down_idx = np.where((result_events == -2) | ((result_events == -1) & (np.roll(result_events, -1) == -1)))[0]
+
+    down_list = diff_events[down_idx]
+    events_list = np.sort(np.concatenate((up_list, down_list)))
+
+    x_events = x_data[events_list]
+    times_list = np.diff(x_events)
+
+    # check whether first event goes up or down and whether the lists contain events
+    if len(up_idx) != 0 and len(down_idx) != 0:
+        if up_idx[0] < down_idx[0]:
+            up_times = times_list[::2]
+            down_times = times_list[1::2]
+        elif up_idx[0] > down_idx[0]:
+            up_times = times_list[1::2]
+            down_times = times_list[::2]
+    else:
+        up_times, down_times = [], []
+
+    return x_result, diff_result, up_list, down_list, up_times, down_times
+
+
+def detection_param_double_gauss_fit(bin_centers, hist, offset, width_start, bounds_gaussian, bounds_double_gaussian,
+                               peak_finder_param=(100, 30, 200, 10)):
+    # instead of getting histograms, modify the function to create histograms.
+    hist_smoothed = gaussian_filter1d(hist, len(hist)/20)
+    hist_diff = np.diff(hist_smoothed)
+    peaks, _ = find_peaks(hist_smoothed, height=peak_finder_param[0], distance=peak_finder_param[1],
+                          prominence=peak_finder_param[2])
+    if len(peaks) == 1:
+        peaks_diff, _ = find_peaks(np.abs(hist_diff),  height=peak_finder_param[0], distance=peak_finder_param[1],
+                                   prominence=peak_finder_param[2], width=peak_finder_param[3])
+        if len(peaks_diff) == 2:
+            snr = 0  # one has to think about this setting
+            popt, pcov = curve_fit(gaussian, bin_centers, hist, p0=(hist[peaks][0], bin_centers[peaks][0],
+                                                                    width_start), bounds=bounds_gaussian)
+        elif len(peaks_diff) == 3:
+            a1 = hist[int((peaks_diff[1] + peaks_diff[0]) / 2)]
+            a2 = hist[int((peaks_diff[2] + peaks_diff[1]) / 2)]
+
+            mu1 = bin_centers[int((peaks_diff[1] + peaks_diff[0]) / 2)]
+            mu2 = bin_centers[int((peaks_diff[2] + peaks_diff[1]) / 2)]
+
+            popt, pcov = curve_fit(double_gaussian, bin_centers, hist,
+                                   p0=(a1, mu1, width_start, a2, mu2, width_start, offset),
+                                   bounds=bounds_double_gaussian)
+            snr = snr_calculation(popt)
+
+    elif len(peaks) == 2:
+        a1 = hist[peaks][0]
+        a2 = hist[peaks][1]
+
+        mu1 = bin_centers[peaks][0]
+        mu2 = bin_centers[peaks][1]
+
+        popt, pcov = curve_fit(double_gaussian, bin_centers, hist,
+                               p0=(a1, mu1, width_start, a2, mu2, width_start, offset),
+                               bounds=bounds_double_gaussian)
+        snr = snr_calculation(popt)
+
+    else:
+        return None # currently I have not better idea, maybe set some default parameters
+
+    return bin_centers, hist, popt, snr

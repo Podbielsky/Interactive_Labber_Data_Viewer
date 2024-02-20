@@ -3,19 +3,26 @@ import os
 import tkinter as tk
 from tkinter import ttk, messagebox
 from tkinter import filedialog
+import numpy as np
 import matplotlib
 matplotlib.use('TkAgg')
 from matplotlib.figure import Figure
-from matplotlib import lines
 import matplotlib.pyplot as plt
+from matplotlib import lines
+from matplotlib import rc
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
-import numpy as np
 from scipy.ndimage import gaussian_filter
-from Data_analysis_and_transforms import image_down_sampling, two_d_fft_on_data, evaluate_poly_background_2d, correct_median_diff
+from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, evaluate_poly_background_2d,
+                                          correct_median_diff)
+from custom_cmap import make_neon_cyclic_colormap
+neon_cmap = make_neon_cyclic_colormap()
+plt.register_cmap(name='NeonPiCy', cmap=neon_cmap)
+rc('pdf', fonttype=42)
 
 
 class InteractiveSlicePlotter:
+    # class is depracted and should not be used in further code put is left as an example
     def __init__(self, root, data):
         self.root = root
         self.root.title("Interactive Slice through 3D Array")
@@ -71,6 +78,7 @@ class InteractiveSlicePlotter:
 
 
 class InteractiveHistogramPlotter:
+    # class is depracted and should not be used in further code put is left as an example
     def __init__(self, root, data, nbins):
         self.root = root
         self.root.title("Interactive Histogram Plotter")
@@ -172,6 +180,8 @@ class InteractiveArrayPlotter:
         self.num_dimensions = len(self.data.measure_dim) - 2
         self.name_data = [str(label) for label in self.data.name_data]
         self.name_data = [label.encode('utf-8').decode('utf-8') for label in self.name_data]
+        self.x_index = 0
+        self.y_index = 0
         # Create a figure and axis for plotting
 
         if figure is None or ax is None:
@@ -190,7 +200,8 @@ class InteractiveArrayPlotter:
         self.histogram_ax.set_xticklabels([])
         self.picked_line = None
         # Define interactive button options
-        self.colormaps = ['viridis', 'plasma', 'inferno', 'magma', 'cividis', 'twilight', 'coolwarm','Spectral' ,'gnuplot']
+        self.colormaps = ['viridis', 'plasma', 'inferno', 'magma', 'cividis', 'twilight', 'coolwarm', 'Spectral',
+                          'gnuplot', 'NeonPiCy']
         self.bg_methods = ['Polynomial', 'Median Difference']
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.root)
         self.toolbar = NavigationToolbar2Tk(self.canvas, root, pack_toolbar=False)
@@ -199,11 +210,15 @@ class InteractiveArrayPlotter:
         self.crosshair_button.pack(side=tk.LEFT)
         self.interpol_button = tk.Button(self.toolbar, text='Interpolation', command=self.toggle_interpolation)
         self.interpol_button.pack(side=tk.LEFT)
+        self.roi_button = tk.Button(self.toolbar, text='ROI', command=self.toggle_crosshair)
+        self.roi_button.pack(side=tk.LEFT)
         self.horiz_line = None
         self.vert_line = None
         self.crosshair_enabled = False
         self.interpolation_enabled = False
         self.invert_enabled = False
+        self.freeze_linecut = False
+        self.linecut_position = None
         # Pre calculate values for selection
         self.parameter_labels = [np.flip(self.data.name_axis)[i] for i in range(self.num_dimensions)]
         self.parameter_values = [list(range(np.flip(self.data.measure_dim)[i])) for i in range(len(np.flip(self.data.measure_dim)))]
@@ -222,7 +237,7 @@ class InteractiveArrayPlotter:
 
         # Create a custom style for label frames to make them smaller
         small_label_frame_style = ttk.Style()
-        small_label_frame_style.configure("Small.TLabelframe", font=('Arial', 8))  # Adjust font size here
+        small_label_frame_style.configure('Small.TLabelframe', font=('Arial', 8))  # Adjust font size here
         frame = ttk.Frame(self.root)
         frame.pack(side=tk.LEFT, padx=5, pady=5)
         self.frame2 = ttk.Frame(self.root)
@@ -273,6 +288,7 @@ class InteractiveArrayPlotter:
         self.histogram_canvas = FigureCanvasTkAgg(self.histogram_fig, master=self.frame2)
         self.histogram_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True, anchor=tk.N)
         self.plot_data()
+        self.canvas.mpl_connect('key_press_event', self.on_key_press)
 
     def plot_data(self):
         tick = time.perf_counter()
@@ -318,7 +334,9 @@ class InteractiveArrayPlotter:
             self.cbar.remove()
             del self.cbar
 
-        c = self.ax.pcolormesh(self.X, self.Y, self.sliced_data, cmap=selected_colormap, shading='auto', zorder=1)
+        c = self.ax.pcolormesh(self.X, self.Y, self.sliced_data, cmap=selected_colormap, shading='auto', zorder=1,
+                               linewidth=0, rasterized=True)
+
         self.cbar = self.figure.colorbar(c, ax=self.ax, label=self.name_data_z)
         self.ax.set_xlabel(self.name_data_x_axis)
         self.ax.set_ylabel(self.name_data_y_axis)
@@ -339,7 +357,6 @@ class InteractiveArrayPlotter:
         print(f'Plotting time: {tock - tick} s')
 
     def toggle_crosshair(self):
-        tick = time.perf_counter()
         self.crosshair_enabled = not self.crosshair_enabled
 
         # Initialize or update crosshair lines
@@ -355,7 +372,6 @@ class InteractiveArrayPlotter:
                 self.vert_line = self.ax.axvline(color='gray', lw=1, ls='--', zorder=10)
             else:
                 self.vert_line.set_visible(True)
-
             self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
         else:
             self.ax_vline.set_visible(False)
@@ -371,47 +387,11 @@ class InteractiveArrayPlotter:
 
         # Redraw the entire figure to ensure layout is updated
         self.figure.canvas.draw_idle()
-        tock = time.perf_counter()
-        print(f'Toggle Crosshair time: {tock - tick} s')
 
     def toggle_invert(self):
         self.invert_enabled = not self.invert_enabled
 
-    def on_mouse_move(self, event):
-
-        if not event.inaxes or not self.crosshair_enabled:
-            return
-
-        # Update the position of the crosshair lines
-        self.horiz_line.set_ydata(event.ydata)
-        self.vert_line.set_xdata(event.xdata)
-
-        x_index = np.argmin(np.abs(self.X[0] - event.xdata))
-        y_index = np.argmin(np.abs(self.Y[:, 0] - event.ydata))
-
-        # Update the vertical line plot
-        self.ax_vline.clear()
-        self.ax_vline.plot(self.sliced_data[:, x_index], self.Y[:, 0])
-        self.ax_vline.set_yticklabels([])
-        for label in self.ax_vline.get_xticklabels():
-            label.set_rotation(270)
-        self.ax_vline.axhline(y=event.ydata, color='gray', lw=1, ls='--')
-
-        # Update the horizontal line plot
-        self.ax_hline.clear()
-        self.ax_hline.plot(self.X[0], self.sliced_data[y_index, :])
-        self.ax_hline.set_xticklabels([])
-        self.ax_hline.axvline(x=event.xdata, color='gray', lw=1, ls='--')
-
-        # Update the limits of the line plots to match the main plot
-        self.ax_vline.set_ylim(self.ax.get_ylim())
-        self.ax_hline.set_xlim(self.ax.get_xlim())
-
-        self.figure.canvas.draw_idle()
-
     def refresh_crosshair(self):
-
-        # Redraw only the crosshair lines using blit
         self.toggle_crosshair()
         self.toggle_crosshair()
 
@@ -457,6 +437,69 @@ class InteractiveArrayPlotter:
     def on_release(self, event):
         # Called when the mouse is released
         self.picked_line = None
+
+    def on_mouse_move(self, event):
+
+        if not event.inaxes or not self.crosshair_enabled:
+            return
+
+        if not self.freeze_linecut:
+            # Update the position of the crosshair lines
+            self.horiz_line.set_ydata(event.ydata)
+            self.vert_line.set_xdata(event.xdata)
+
+            self.x_index = np.argmin(np.abs(self.X[0] - event.xdata))
+            self.y_index = np.argmin(np.abs(self.Y[:, 0] - event.ydata))
+
+            # Update the vertical line plot
+            self.ax_vline.clear()
+            self.ax_vline.plot(self.sliced_data[:, self.x_index], self.Y[:, 0])
+            self.ax_vline.set_yticklabels([])
+            for label in self.ax_vline.get_xticklabels():
+                label.set_rotation(270)
+            self.ax_vline.axhline(y=event.ydata, color='gray', lw=1, ls='--')
+
+            # Update the horizontal line plot
+            self.ax_hline.clear()
+            self.ax_hline.plot(self.X[0], self.sliced_data[self.y_index, :])
+            self.ax_hline.set_xticklabels([])
+            self.ax_hline.axvline(x=event.xdata, color='gray', lw=1, ls='--')
+
+            # Update the limits of the line plots to match the main plot
+            self.ax_vline.set_ylim(self.ax.get_ylim())
+            self.ax_hline.set_xlim(self.ax.get_xlim())
+
+            self.figure.canvas.draw_idle()
+
+        elif self.freeze_linecut:
+            # it does not work properly, have to invastigate why, works only on the first plot, but why?
+            # Update the vertical line plot
+            self.ax_vline.clear()
+            self.ax_vline.plot(self.sliced_data[:, self.linecut_position[0]], self.Y[:, 0])
+            self.ax_vline.set_yticklabels([])
+            for label in self.ax_vline.get_xticklabels():
+                label.set_rotation(270)
+            self.ax_vline.axhline(y=event.ydata, color='gray', lw=1, ls='--')
+
+            # Update the horizontal line plot
+            self.ax_hline.clear()
+            self.ax_hline.plot(self.X[0], self.sliced_data[self.linecut_position[1], :])
+            self.ax_hline.set_xticklabels([])
+            self.ax_hline.axvline(x=event.xdata, color='gray', lw=1, ls='--')
+
+            # Update the limits of the line plots to match the main plot
+            self.ax_vline.set_ylim(self.ax.get_ylim())
+            self.ax_hline.set_xlim(self.ax.get_xlim())
+
+            #self.figure.canvas.draw_idle()
+
+    def on_key_press(self, event):
+        if event.key == 's':
+            self.freeze_linecut = not self.freeze_linecut
+            self.linecut_position = (self.x_index, self.y_index)
+        else:
+            pass
+
 
     def toggle_interpolation(self):
         self.interpolation_enabled = not self.interpolation_enabled
@@ -575,25 +618,52 @@ class InteractiveArrayPlotter:
         self.data_axis_transform_window.title("Axis Scaling and Renaming")
         self.data_axis_transform_window.geometry("400x200")
 
-        self.x_axis_name_input = tk.Entry(self.data_axis_transform_window)
+        self.data_axis_transform_naming_frame = ttk.Frame(self.data_axis_transform_window)
+        self.data_axis_transform_scaling_frame = ttk.Frame(self.data_axis_transform_window)
+
+        tk.Label(self.data_axis_transform_naming_frame, text="Axis Names:").pack()
+        tk.Label(self.data_axis_transform_scaling_frame, text="Axis Scaling Factors:").pack()
+
+        self.x_axis_name_input = tk.Entry(self.data_axis_transform_naming_frame)
         self.x_axis_name_input.pack()
         self.x_axis_name_input.insert(0, self.name_data_x_axis)
+        self.x_axis_scale_input = tk.Entry(self.data_axis_transform_scaling_frame)
+        self.x_axis_scale_input.pack()
+        self.x_axis_scale_input.insert(0, '1.0')
 
-        self.y_axis_name_input = tk.Entry(self.data_axis_transform_window)
+        self.y_axis_name_input = tk.Entry(self.data_axis_transform_naming_frame)
         self.y_axis_name_input.pack()
         self.y_axis_name_input.insert(0, self.name_data_y_axis)
+        self.y_axis_scale_input = tk.Entry(self.data_axis_transform_scaling_frame)
+        self.y_axis_scale_input.pack()
+        self.y_axis_scale_input.insert(0, '1.0')
 
-        self.z_axis_name_input = tk.Entry(self.data_axis_transform_window)
+        self.z_axis_name_input = tk.Entry(self.data_axis_transform_naming_frame)
         self.z_axis_name_input.pack()
         self.z_axis_name_input.insert(0, self.name_data_z)
+        self.z_axis_scale_input = tk.Entry(self.data_axis_transform_scaling_frame)
+        self.z_axis_scale_input.pack()
+        self.z_axis_scale_input.insert(0, '1.0')
 
         submit_button = tk.Button(self.data_axis_transform_window, text="Apply", command=self.apply_data_axis_transform)
-        submit_button.pack()
+        submit_button.pack(side=tk.BOTTOM)
+        self.data_axis_transform_naming_frame.pack(side=tk.LEFT)
+        self.data_axis_transform_scaling_frame.pack(side=tk.RIGHT)
 
     def apply_data_axis_transform(self):
         self.name_data_x_axis = str(self.x_axis_name_input.get())
         self.name_data_y_axis = str(self.y_axis_name_input.get())
         self.name_data_z = str(self.z_axis_name_input.get())
+
+        self.X = self.X * np.float64(self.x_axis_scale_input.get())
+        self.Y = self.Y * np.float64(self.y_axis_scale_input.get())
+        self.sliced_data = self.sliced_data * np.float64(self.z_axis_scale_input.get())
+
+        self.xlim = [np.min(self.X), np.max(self.X)]
+        self.ylim = [np.min(self.Y), np.max(self.Y)]
+        self.vmin = np.min(self.sliced_data)
+        self.vmax = np.max(self.sliced_data)
+
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
@@ -657,7 +727,9 @@ class InteractiveArrayPlotter:
         tick = time.perf_counter()
         # Update the pcolormesh with new vmin and vmax values
         self.ax.clear()
-        c=self.ax.pcolormesh(self.X, self.Y, self.sliced_data, cmap=self.colormap_combobox.get(), vmin=vmin, vmax=vmax, shading='auto', zorder=1)
+        c=self.ax.pcolormesh(self.X, self.Y, self.sliced_data, cmap=self.colormap_combobox.get(), vmin=vmin, vmax=vmax,
+                             shading='auto', zorder=1, linewidth=0, rasterized=True)
+
         if hasattr(self, 'cbar'):
             self.cbar.remove()
             del self.cbar
@@ -798,10 +870,7 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
         self.line_ax.grid(True)
 
     def plot_data(self):
-        #the original plot_data method to update the pcolormesh plot
         super().plot_data()
-
-        #update the line plot
         self.update_line_plot()
 
     def update_line_plot(self):
@@ -831,8 +900,6 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
             self.line_ax.set_xlabel(self.hist_xlabel)
             self.line_ax.set_ylabel(self.hist_ylabel)
 
-
-        # Redraw the canvas
         self.canvas.draw_idle()
 
     def on_right_click(self, event):

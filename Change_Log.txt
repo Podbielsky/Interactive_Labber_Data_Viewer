@@ -15,5 +15,12 @@ changes in v0.4.3a
 - include median difference background correction
 
 changes in v0.4.4
+- bug fix of saving file as .pdf format introducing false raster
+- bug fix for coral draw read-in of .pdf files
+- removed deprecated histogram map and time trace map plotting as standalone functions from the main .hdf5 file menu
+  (functionalities of those functions are taken over by map plot with traces)
+- added new cyclic colormap NeonPiCy
+- included scaling of displayed data
+
 
 

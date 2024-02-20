@@ -35,8 +35,6 @@ def data_menu_bar(root, hdf5data):
     menubar.add_cascade(label='Plotting', menu=plotting)
     plotting.add_command(label='Plot Map', command=lambda: plot_array(hdf5data, root))
     plotting.add_command(label='Plot Map with Trace Data', command=lambda: plot_array_with_trace_data(hdf5data, root))
-    plotting.add_command(label='Plot Traces Map', command=lambda: plot_time_traces(hdf5data, root))
-    plotting.add_command(label='Plot Histograms', command=lambda: plot_histograms(hdf5data, root))
     plotting.add_separator()
 
     return menubar
@@ -92,32 +90,6 @@ def create_data_array(hdf5Data):
     channel_names = [str(name_i[0]) for name_i in hdf5Data.array_tags]
     np.save(pth + base_name + '_tags_.npy', channel_names, allow_pickle=True)
     np.save(pth + new_filename, hdf5Data.arrays, allow_pickle=True)
-
-
-def plot_histograms(hdf5Data, root):
-    new_window = tk.Toplevel(root)
-    new_window.title("Histograms")
-    new_window.geometry("300x200")
-
-    label = tk.Label(new_window, text="Histograms")
-    label.pack(pady=20)
-    hdf5Data.set_data()
-    hdf5Data.set_traces()
-    hdf5Data.calc_hist(200)
-    InteractiveHistogramPlotter(new_window, hdf5Data.traces, 200)
-
-
-def plot_time_traces(hdf5Data, root):
-    new_window = tk.Toplevel(root)
-    new_window.title("Time Traces")
-    new_window.geometry("300x200")
-
-    label = tk.Label(new_window, text="Time Traces Display")
-    label.pack(pady=20)
-    hdf5Data.set_data()
-    hdf5Data.set_traces()
-    InteractiveSlicePlotter(new_window, hdf5Data.traces)
-
 
 def plot_array(hdf5Data, root):
     new_window = tk.Toplevel(root)

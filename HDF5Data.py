@@ -424,7 +424,6 @@ class HDF5Data:
         should_array_shape = (int(self.measure_dim[0]), int(np.prod(np.array(self.measure_dim)[1:])))
         trace_keys = list(self.file['Traces'].keys())
         self.trace_reference = self.file[f'Traces/{trace_keys[0]}']
-        save_path = self.wdir + '/traces'
         self.trace_order = np.reshape([i for i in range(self.trace_reference.shape[-1])], should_array_shape)
 
     def calc_hist(self, nbins):
