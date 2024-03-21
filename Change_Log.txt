@@ -19,8 +19,14 @@ changes in v0.4.4
 - bug fix for coral draw read-in of .pdf files
 - removed deprecated histogram map and time trace map plotting as standalone functions from the main .hdf5 file menu
   (functionalities of those functions are taken over by map plot with traces)
+- added python file for custom colormaps
 - added new cyclic colormap NeonPiCy
 - included scaling of displayed data
+- aborted measurements can now be displayed
+- included background subtraction by relation parameters
+- moved derivative and 2d fft to new sub menu called "Tools"
+- added tool which allows to draw in arbitrary lines and tells staring and end position
+
 
 
 

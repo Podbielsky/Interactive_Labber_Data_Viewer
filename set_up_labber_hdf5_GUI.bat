@@ -26,6 +26,7 @@ IF EXIST "%ENV_NAME%\Scripts\activate.bat" (
     copy "%~dp0HDF5Data.py" "%ENV_NAME%\Scripts"
     copy "%~dp0interactive_plotting_tools.py" "%ENV_NAME%\Scripts"
     copy "%~dp0Data_analysis_and_transforms.py" "%ENV_NAME%\Scripts"
+    copy "%~dp0custom_cmap.py" "%ENV_NAME%\Scripts"
 
     echo Python script copied successfully.
 

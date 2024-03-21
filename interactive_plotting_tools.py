@@ -15,7 +15,7 @@ from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 from scipy.ndimage import gaussian_filter
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, evaluate_poly_background_2d,
                                           correct_median_diff)
-from custom_cmap import make_neon_cyclic_colormap
+from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap
 neon_cmap = make_neon_cyclic_colormap()
 plt.register_cmap(name='NeonPiCy', cmap=neon_cmap)
 rc('pdf', fonttype=42)
@@ -162,10 +162,15 @@ class InteractiveArrayPlotter:
         self.data_menu.add_command(label="Interpolation Settings", command=self.open_interpolation_window)
         self.data_menu.add_command(label="Gaussian Filter", command=self.open_gaussian_filter_window)
         self.data_menu.add_command(label="Background Subtraction", command=self.open_background_subtraction_window)
-        self.data_menu.add_command(label="Derivative along Axis", command=self.open_derivative_window)
-        self.data_menu.add_command(label="2-D FFT on Data", command=self.apply_2d_fft)
-        self.data_menu.add_command(label="Rename Data and Axis", command=self.open_data_axis_transform)
+        self.data_menu.add_command(label="Rename and Scale Data and Axis", command=self.open_data_axis_transform)
         self.menubar.add_cascade(label="Displayed Data", menu=self.data_menu)
+
+        # Create Tool Menu
+        self.tool_menu = tk.Menu(self.menubar, tearoff=0)
+        self.tool_menu.add_command(label="Derivative along Axis", command=self.open_derivative_window)
+        self.tool_menu.add_command(label="2-D FFT on Data", command=self.apply_2d_fft)
+        self.tool_menu.add_command(label="Draw Lines", command=self.open_draw_lines_window)
+        self.menubar.add_cascade(label="Tools", menu=self.tool_menu)
 
         # Create Help Menu
         self.help_menu = tk.Menu(self.menubar, tearoff=0)
@@ -182,6 +187,7 @@ class InteractiveArrayPlotter:
         self.name_data = [label.encode('utf-8').decode('utf-8') for label in self.name_data]
         self.x_index = 0
         self.y_index = 0
+        self.nan_mask = np.array([])
         # Create a figure and axis for plotting
 
         if figure is None or ax is None:
@@ -201,8 +207,10 @@ class InteractiveArrayPlotter:
         self.picked_line = None
         # Define interactive button options
         self.colormaps = ['viridis', 'plasma', 'inferno', 'magma', 'cividis', 'twilight', 'coolwarm', 'Spectral',
-                          'gnuplot', 'NeonPiCy']
-        self.bg_methods = ['Polynomial', 'Median Difference']
+                          'gnuplot', 'NeonPiCy', 'BiMap']
+        self.bg_methods = ['Polynomial', 'Median Difference', 'Relation Parameters']
+        self.relation_parameter_entry_list = []
+        self.drawn_lines_list = []
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.root)
         self.toolbar = NavigationToolbar2Tk(self.canvas, root, pack_toolbar=False)
         self.toolbar.update()
@@ -219,6 +227,10 @@ class InteractiveArrayPlotter:
         self.invert_enabled = False
         self.freeze_linecut = False
         self.linecut_position = None
+        self.drawing_line = False
+        self.current_line = None
+        self.click_cid = None
+        self.move_cid = None
         # Pre calculate values for selection
         self.parameter_labels = [np.flip(self.data.name_axis)[i] for i in range(self.num_dimensions)]
         self.parameter_values = [list(range(np.flip(self.data.measure_dim)[i])) for i in range(len(np.flip(self.data.measure_dim)))]
@@ -304,11 +316,11 @@ class InteractiveArrayPlotter:
 
         # Use selected values to slice and plot data
         if not self.invert_enabled:
-            self.X = np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)]
-            self.Y = np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)]
-            print(np.shape(self.data.measure_data))
-            self.sliced_data = (self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)]
-
+            self.X = (np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])
+            self.nan_mask = ~np.isnan(self.X).any(axis=1)
+            self.X = self.X[self.nan_mask]
+            self.Y = (np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
+            self.sliced_data = ((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
             self.ax.clear()
             self.xlim = (np.min(self.X), np.max(self.X))
             self.ylim = (np.min(self.Y), np.max(self.Y))
@@ -318,9 +330,15 @@ class InteractiveArrayPlotter:
             self.name_data_y_axis = str(np.flip(self.data.name_axis)[-2])
 
         if self.invert_enabled:
-            self.Y = (np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)]).T
-            self.X = (np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)]).T
-            self.sliced_data = ((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)]).T
+            self.X = ((np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(0, 1).reshape(
+                np.flip(self.data.measure_dim))[tuple(selected_indices)]))
+            self.nan_mask = ~np.isnan(self.X).any(axis=1)
+            self.X = (self.X[self.nan_mask]).T
+
+            self.Y = ((np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(
+                np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]).T
+            self.sliced_data = (((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
+                0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]).T
 
             self.ax.clear()
             self.xlim = (np.min(self.X), np.max(self.X))
@@ -397,8 +415,8 @@ class InteractiveArrayPlotter:
 
     def init_movable_lines(self):
         # Initial positions for vmin and vmax lines
-        vmin_initial = np.min(self.sliced_data)
-        vmax_initial = np.max(self.sliced_data)
+        vmin_initial = np.nanmin(self.sliced_data)
+        vmax_initial = np.nanmax(self.sliced_data)
         self.vline1 = None
         self.vline2 = None
         # Create vertical lines
@@ -500,7 +518,6 @@ class InteractiveArrayPlotter:
         else:
             pass
 
-
     def toggle_interpolation(self):
         self.interpolation_enabled = not self.interpolation_enabled
         if self.interpolation_enabled:
@@ -566,6 +583,39 @@ class InteractiveArrayPlotter:
         # Initially update inputs for the default selected method
         self.update_bg_subtraction_inputs()
 
+    def open_draw_lines_window(self):
+        self.draw_lines_window = tk.Toplevel(self.root)
+        self.draw_lines_window.title("Draw Lines")
+        self.draw_lines_window.geometry("400x200")
+        # Frames
+
+        self.draw_lines_button_frame = tk.Frame(self.draw_lines_window)
+        self.draw_lines_button_frame.pack(side=tk.BOTTOM)
+
+        self.lines_list_frame = tk.Frame(self.draw_lines_window)
+        self.lines_list_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # Scrollbar
+        self.lines_list_scrollbar = tk.Scrollbar(self.lines_list_frame)
+        self.lines_list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Listbox for displaying lines
+        self.lines_listbox = tk.Listbox(self.lines_list_frame, yscrollcommand=self.lines_list_scrollbar.set)
+        self.lines_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.lines_list_scrollbar.config(command=self.lines_listbox.yview)
+
+        # Buttons
+        activate_button = tk.Button(self.draw_lines_button_frame, text='Activate',
+                                    command=self.activate_line_drawing)
+        deactivate_button = tk.Button(self.draw_lines_button_frame, text='Deactivate',
+                                      command=self.deactivate_line_drawing)
+        reset_lines_button = tk.Button(self.draw_lines_button_frame, text='Reset',
+                                       command=self.reset_lines)
+        activate_button.pack(side=tk.LEFT)
+        deactivate_button.pack(side=tk.LEFT)
+        reset_lines_button.pack(side=tk.LEFT)
+
+
     def update_bg_subtraction_inputs(self, event=None):
         # Clear previous inputs
         for widget in self.method_input_frame.winfo_children():
@@ -585,6 +635,16 @@ class InteractiveArrayPlotter:
             self.poly_order_y.pack()
             self.poly_order_y.insert(0, "1")  # Default value
 
+        elif selected_method == 'Relation Parameters':
+            # Add input fields for the Relation Parameters method
+            labels = ["Coefficient before X:", "Power of X:", "Coefficient before Y:", "Power of Y:", "Constant term:"]
+            for i, label in enumerate(labels):
+                tk.Label(self.method_input_frame, text=label).grid(row=i, column=0)
+                entry = tk.Entry(self.method_input_frame, width=10)
+                entry.insert(0, "0")
+                entry.grid(row=i, column=1)
+                self.relation_parameter_entry_list.append(entry)
+
         elif selected_method == 'Median Difference':
             pass
 
@@ -595,8 +655,11 @@ class InteractiveArrayPlotter:
         if selected_method == 'Polynomial':
             self.apply_poly_bg()
 
-        if selected_method == 'Median Difference':
+        elif selected_method == 'Median Difference':
             self.apply_median_difference()
+
+        elif selected_method == 'Relation Parameters':
+            self.apply_relation_parameters()
 
     def open_derivative_window(self):
         # Create a new pop-up window for interpolation settings
@@ -700,6 +763,17 @@ class InteractiveArrayPlotter:
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
+    def apply_relation_parameters(self):
+        self.sliced_data = (self.sliced_data + np.float64(self.relation_parameter_entry_list[0].get()) *
+                            self.X ** np.float64(self.relation_parameter_entry_list[1].get()) +
+                            np.float64(self.relation_parameter_entry_list[2].get()) *
+                            self.Y ** np.float64(self.relation_parameter_entry_list[3].get())
+                            + np.float64(self.relation_parameter_entry_list[4].get()))
+        self.vmin = np.min(self.sliced_data)
+        self.vmax = np.max(self.sliced_data)
+        self.update_histogramm()
+        self.update_pcolormesh(self.vmin, self.vmax)
+
     def apply_gaussian_filter(self):
         self.sliced_data = gaussian_filter(self.sliced_data, (float(self.filter_pixel_x.get()), float(self.filter_pixel_y.get())))
         self.update_pcolormesh(self.vmin, self.vmax)
@@ -722,6 +796,61 @@ class InteractiveArrayPlotter:
         self.vmax = np.max(self.sliced_data)
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
+
+    def activate_line_drawing(self):
+        self.click_cid = self.canvas.mpl_connect('button_press_event', self.on_canvas_click)
+        self.move_cid = self.canvas.mpl_connect('motion_notify_event', self.on_canvas_move)
+
+    def deactivate_line_drawing(self):
+        if hasattr(self, 'click_cid'):
+            self.canvas.mpl_disconnect(self.click_cid)
+            del self.click_cid
+        if hasattr(self, 'move_cid'):
+            self.canvas.mpl_disconnect(self.move_cid)
+            del self.move_cid  # Remove the attribute to clean up
+
+    def reset_lines(self):
+        self.drawn_lines_list = []
+        self.update_lines_listbox()
+
+    def update_lines_listbox(self):
+        self.lines_listbox.delete(0, tk.END)  # Clear the current contents of the listbox
+        for i, line in enumerate(self.drawn_lines_list, start=1):
+            # Assuming each line is a tuple of start and end points like ((x1, y1), (x2, y2))
+            start_point, end_point = line
+            line_str = f"Line {i}: Start {start_point} End {end_point}"
+            self.lines_listbox.insert(tk.END, line_str)
+
+    def on_canvas_click(self, event):
+        if event.inaxes != self.ax:
+            return  # Ignore clicks outside the axes
+
+        if not self.drawing_line:
+            # Start drawing a new line
+            self.drawing_line = True
+            self.current_line = [(event.xdata, event.ydata), (event.xdata, event.ydata)]
+            # Draw a line on the plot
+            (line,) = self.ax.plot([event.xdata, event.xdata], [event.ydata, event.ydata], color='red')
+            self.current_line_artist = line
+        else:
+            # Finalize the current line
+            self.drawing_line = False
+            # Update the final point of the line
+            self.current_line[1] = (event.xdata, event.ydata)
+            self.drawn_lines_list.append(self.current_line)
+            self.update_lines_listbox()
+            self.current_line = None  # Reset for the next line
+            self.canvas.draw_idle()
+
+    def on_canvas_move(self, event):
+        if event.inaxes != self.ax or not self.drawing_line:
+            return  # Ignore if we're not in the process of drawing a line
+
+        # Update the end point of the current line to follow the mouse
+        self.current_line[1] = (event.xdata, event.ydata)
+        self.current_line_artist.set_data([self.current_line[0][0], event.xdata],
+                                          [self.current_line[0][1], event.ydata])
+        self.canvas.draw_idle()
 
     def update_pcolormesh(self, vmin, vmax):
         tick = time.perf_counter()
@@ -781,7 +910,7 @@ class InteractiveArrayPlotter:
         np.save(pth + 'data_array_.npy', self.data.measure_data, allow_pickle=True)
 
     def show_about(self):
-        messagebox.showinfo("About", "Interactive Array Plotter\nVersion 0.4.3")
+        messagebox.showinfo("About", "Interactive Array Plotter\nVersion 0.4.4")
 
     ### reset functions ###
 
@@ -808,6 +937,8 @@ class InteractiveArrayPlotter:
         self.sliced_data = None
         self.X, self.Y = None, None
         self.xlim, self.ylim = None, None
+        self.relation_parameter_entry_list = []
+        self.drawn_lines_list = []
 
         # Redraw the canvas to reflect the reset state
         self.canvas.draw_idle()

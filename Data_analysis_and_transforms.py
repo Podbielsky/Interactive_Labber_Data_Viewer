@@ -127,6 +127,7 @@ def correct_median_diff(imag):
     corrected_data = imag - D
     return corrected_data
 
+### from down here: work in progress
 
 def gaussian(x, a, mu, sigma):
     '''

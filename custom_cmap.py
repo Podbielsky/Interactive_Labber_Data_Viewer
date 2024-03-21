@@ -23,3 +23,8 @@ def make_neon_cyclic_colormap():
                   (1.0, 1.0, 1.0)]
     }
     return LinearSegmentedColormap('NeonPiCy', cmap_dict)
+
+def make_bi_colormap():
+    # Define colors
+    bi_pride = LinearSegmentedColormap.from_list("", ["#D60270", "#9B4F96", "#0038A8"])
+    return bi_pride

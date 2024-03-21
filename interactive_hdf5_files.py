@@ -40,8 +40,6 @@ def data_menu_bar(root, hdf5data):
     return menubar
 
 
-#### commands for menu bar ####
-
 
 def get_path(hdf5Data):
     pth = filedialog.askopenfilename(filetypes=[("HDF5 files", "*.hdf5")])
@@ -245,7 +243,7 @@ def main():
     root = tk.Tk()
     data_bar = data_menu_bar(root, hdf5Data)
     root.config(menu=data_bar)
-    root.title("HDF5 File Viewer")
+    root.title('HDF5 File Viewer')
     root.protocol("WM_DELETE_WINDOW", on_close)
     tree = display_hdf5_file(root, hdf5Data)
     root.mainloop()
