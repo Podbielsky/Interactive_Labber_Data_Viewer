@@ -320,7 +320,8 @@ class InteractiveArrayPlotter:
             self.nan_mask = ~np.isnan(self.X).any(axis=1)
             self.X = self.X[self.nan_mask]
             self.Y = (np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
-            self.sliced_data = ((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
+            self.sliced_data = ((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
+                0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
             self.ax.clear()
             self.xlim = (np.min(self.X), np.max(self.X))
             self.ylim = (np.min(self.Y), np.max(self.Y))
@@ -615,7 +616,6 @@ class InteractiveArrayPlotter:
         deactivate_button.pack(side=tk.LEFT)
         reset_lines_button.pack(side=tk.LEFT)
 
-
     def update_bg_subtraction_inputs(self, event=None):
         # Clear previous inputs
         for widget in self.method_input_frame.winfo_children():
@@ -853,12 +853,11 @@ class InteractiveArrayPlotter:
         self.canvas.draw_idle()
 
     def update_pcolormesh(self, vmin, vmax):
-        tick = time.perf_counter()
         # Update the pcolormesh with new vmin and vmax values
         self.ax.clear()
-        c=self.ax.pcolormesh(self.X, self.Y, self.sliced_data, cmap=self.colormap_combobox.get(), vmin=vmin, vmax=vmax,
-                             shading='auto', zorder=1, linewidth=0, rasterized=True)
-
+        c = self.ax.pcolormesh(self.X, self.Y, self.sliced_data, cmap=self.colormap_combobox.get(), vmin=vmin,
+                                   vmax=vmax,
+                                   shading='auto', zorder=1, linewidth=0, rasterized=True)
         if hasattr(self, 'cbar'):
             self.cbar.remove()
             del self.cbar
@@ -873,8 +872,6 @@ class InteractiveArrayPlotter:
         if self.crosshair_enabled:
             self.refresh_crosshair()
         self.canvas.draw_idle()
-        tock = time.perf_counter()
-        print(f'Updating colorbar time: {tock - tick} s')
 
     def update_histogramm(self):
         self.histogram_ax.clear()
@@ -886,6 +883,14 @@ class InteractiveArrayPlotter:
         self.histogram_canvas.draw_idle()
 
     def update_plot(self):
+        # feature does not work as intended and leads to some weird behaviour which allows to use those bugs as a feature
+        if self.invert_enabled:
+            self.X, self.Y = self.Y.T, self.X.T
+            self.sliced_data = self.sliced_data.T
+            self.name_data_x_axis, self.name_data_y_axis = self.name_data_y_axis, self.name_data_x_axis
+            self.xlim = (np.min(self.X), np.max(self.X))
+            self.ylim = (np.min(self.Y), np.max(self.Y))
+            self.toggle_invert()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 

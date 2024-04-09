@@ -15,4 +15,5 @@ TODO list for next versions:
 (maybe add functionality to plot single traces and perform fits on them, should be done after .npy read-in works.
  Should include mulit column read in for hdf5 data and multi-trace selection.
   Implementation should be a new line plotting class which would also be used in line-cuts)
-
+- invert feature of update plot function does not what it should (it does not replot the data inverted but does
+transpose the internally saved data) (done)
