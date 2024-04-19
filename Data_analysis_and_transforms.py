@@ -129,6 +129,7 @@ def correct_median_diff(imag):
 
 ### from down here: work in progress
 
+
 def gaussian(x, a, mu, sigma):
     '''
     :param x: 1d array for x-values
@@ -138,6 +139,7 @@ def gaussian(x, a, mu, sigma):
     :return: gaussian peak function a * exp( - (x - mu) ** 2 / (2 * sigma ** 2) wo constant offset
     '''
     return a * np.exp(-1 * (x - mu) ** 2 / (2 * sigma ** 2))
+
 
 def double_gaussian(x, a1, mu1, sigma1, a2, mu2, sigma2, c):
     '''

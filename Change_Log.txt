@@ -28,5 +28,10 @@ changes in v0.4.4
 - added tool which allows to draw in arbitrary lines and tells staring and end position
 
 
+change in v0.4.5
+- invert button now also works with update plot
+- the start and coordinates of the lines are now rounded to the 6 digit
+
+
 
 

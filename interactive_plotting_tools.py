@@ -817,7 +817,7 @@ class InteractiveArrayPlotter:
         self.lines_listbox.delete(0, tk.END)  # Clear the current contents of the listbox
         for i, line in enumerate(self.drawn_lines_list, start=1):
             # Assuming each line is a tuple of start and end points like ((x1, y1), (x2, y2))
-            start_point, end_point = line
+            start_point, end_point = np.round(line, 6)
             line_str = f"Line {i}: Start {start_point} End {end_point}"
             self.lines_listbox.insert(tk.END, line_str)
 
