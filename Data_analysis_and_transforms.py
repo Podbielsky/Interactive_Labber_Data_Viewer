@@ -127,6 +127,20 @@ def correct_median_diff(imag):
     corrected_data = imag - D
     return corrected_data
 
+
+def correct_mean_of_lines(img):
+
+    '''
+    Corrects an image by substractiong the mean of each line
+
+    :param img: 2D numpy array representing the image to be corrected
+    :return: 2D numpy array of the corrected image.
+    '''
+
+    BG = np.mean(img, axis=1, keepdims=True)
+    return img - BG
+
+
 ### from down here: work in progress
 
 

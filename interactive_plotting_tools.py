@@ -14,7 +14,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 from scipy.ndimage import gaussian_filter
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, evaluate_poly_background_2d,
-                                          correct_median_diff)
+                                          correct_median_diff, correct_mean_of_lines)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap
 neon_cmap = make_neon_cyclic_colormap()
 plt.register_cmap(name='NeonPiCy', cmap=neon_cmap)
@@ -208,7 +208,7 @@ class InteractiveArrayPlotter:
         # Define interactive button options
         self.colormaps = ['viridis', 'plasma', 'inferno', 'magma', 'cividis', 'twilight', 'coolwarm', 'Spectral',
                           'gnuplot', 'NeonPiCy', 'BiMap']
-        self.bg_methods = ['Polynomial', 'Median Difference', 'Relation Parameters']
+        self.bg_methods = ['Polynomial', 'Median Difference', 'Mean of Lines', 'Relation Parameters']
         self.relation_parameter_entry_list = []
         self.drawn_lines_list = []
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.root)
@@ -648,6 +648,9 @@ class InteractiveArrayPlotter:
         elif selected_method == 'Median Difference':
             pass
 
+        elif selected_method == 'Mean of Lines':
+            pass
+
     def apply_background_subtraction(self):
         selected_method = self.background_subtraction_combobox.get()
 
@@ -661,8 +664,11 @@ class InteractiveArrayPlotter:
         elif selected_method == 'Relation Parameters':
             self.apply_relation_parameters()
 
+        elif selected_method == 'Mean of Lines':
+            self.apply_mean_of_lines()
+
     def open_derivative_window(self):
-        # Create a new pop-up window for interpolation settings
+
         self.derivative_window = tk.Toplevel(self.root)
         self.derivative_window.title("Calculate derivative along axis")
         self.derivative_window.geometry("400x200")
@@ -670,9 +676,6 @@ class InteractiveArrayPlotter:
         self.derivative_combobox = ttk.Combobox(self.derivative_window, values=self.axis_selection, state='readonly', width=10)
         self.derivative_combobox.pack(side=tk.BOTTOM, padx=5, pady=0)
         self.derivative_combobox.set('x')
-        # Add a label and entry widget for the first interpolation value
-
-
         submit_button = tk.Button(self.derivative_window, text="Apply", command=self.apply_derivative)
         submit_button.pack()
 
@@ -758,6 +761,13 @@ class InteractiveArrayPlotter:
 
     def apply_median_difference(self):
         self.sliced_data = correct_median_diff(self.sliced_data)
+        self.vmin = np.min(self.sliced_data)
+        self.vmax = np.max(self.sliced_data)
+        self.update_histogramm()
+        self.update_pcolormesh(self.vmin, self.vmax)
+
+    def apply_mean_of_lines(self):
+        self.sliced_data = correct_mean_of_lines(self.sliced_data)
         self.vmin = np.min(self.sliced_data)
         self.vmax = np.max(self.sliced_data)
         self.update_histogramm()
