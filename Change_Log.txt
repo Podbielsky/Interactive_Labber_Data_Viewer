@@ -31,7 +31,8 @@ changes in v0.4.4
 change in v0.4.5
 - invert button now also works with update plot
 - the start and coordinates of the lines are now rounded to the 6 digit
-
+- added line-wise mean correction
+- gradient now uses mean spacing of x and y coordinates
 
 
 

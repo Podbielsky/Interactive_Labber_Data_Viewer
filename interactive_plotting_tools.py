@@ -789,7 +789,11 @@ class InteractiveArrayPlotter:
         self.update_pcolormesh(self.vmin, self.vmax)
 
     def apply_derivative(self):
-        self.sliced_data = np.gradient(self.sliced_data)[self.axis_selection.index(self.derivative_combobox.get())]
+        # Calculate mean spacing between X and Y coordinates
+        dx = np.mean((np.diff(self.X, axis=1)).flatten())
+        dy = np.mean((np.diff(self.Y, axis=0)).flatten())
+        # Calculate gradient
+        self.sliced_data = np.gradient(self.sliced_data, dx, dy)[self.axis_selection.index(self.derivative_combobox.get())]
         self.vmin = np.min(self.sliced_data)
         self.vmax = np.max(self.sliced_data)
         self.update_histogramm()

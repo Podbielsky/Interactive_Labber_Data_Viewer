@@ -7,12 +7,11 @@ import numpy as np
 import os
 import shutil
 from HDF5Data import HDF5Data
-from interactive_plotting_tools import InteractiveHistogramPlotter
-from interactive_plotting_tools import InteractiveSlicePlotter
 from interactive_plotting_tools import InteractiveArrayPlotter
 from interactive_plotting_tools import InteractiveArrayAndLinePlotter
 
 array_plotters = []
+
 
 def data_menu_bar(root, hdf5data):
     menubar = tk.Menu(root)
@@ -38,7 +37,6 @@ def data_menu_bar(root, hdf5data):
     plotting.add_separator()
 
     return menubar
-
 
 
 def get_path(hdf5Data):
