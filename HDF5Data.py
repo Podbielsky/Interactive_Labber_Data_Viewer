@@ -89,6 +89,8 @@ class HDF5Data:
         set_data():
             Opens the HDF5 file for reading and sets it to the file attribute.
 
+        #fehlt copy_objects_recursive?
+
         copy_to(destination_dir):
             Copies the HDF5 file to a specified destination directory.
 
@@ -153,10 +155,11 @@ class HDF5Data:
             Resets the attributes of the HDF5Data object to their default states, essentially reinitializing the object.
 
     '''
+
     def __init__(self, wdir=None, readpath=None, file=None, file_name=None, arrays=None, array_tags=None,
                  measure_axis=None, name_axis=None, measure_data=None, name_data=None, measure_dim=None,
                  shape_data=None, current_h5dir=None, savepath=None, traces=None, shape_trace=None, trace_time=None,
-                 trace_order=None, traces_dt=None, trace_reference=None ,hist=None, bins=None):
+                 trace_order=None, traces_dt=None, trace_reference=None, hist=None, bins=None):
 
         self.readpath = readpath
         self.shape_data = shape_data
@@ -195,29 +198,25 @@ class HDF5Data:
         except Exception as e:
             print(f"Error setting HDF5 data: {e}")
 
-    def _copy_objects_recursive(self, src, dest):
+    # %% Hannah Vogel
+    def skip_selected_objects_recursive_in_copying_process(self, src, dest, selected_options):
+        # to skip datasets selected in checkbutton window in remove_selected_options_window (interactive_hdf5_files)
         for name, item in src.items():
-            if isinstance(item, h5py.Group):
-                # Recursively copy groups
-                new_group = dest.create_group(name)
-                # Copy attributes
-                for key, value in item.attrs.items():
-                    new_group.attrs[key] = value
-                self._copy_objects_recursive(item, new_group)
-            elif isinstance(item, h5py.Dataset):
-                # Copy datasets
-                new_dataset = dest.create_dataset(
-                    name,
-                    data=item[()],
-                    compression=item.compression,
-                    compression_opts=item.compression_opts
-                )
-                # Copy attributes
-                for key, value in item.attrs.items():
-                    new_dataset.attrs[key] = value
-            else:
-                print(f"Unsupported item: {name} ({type(item)})")
+            if name in selected_options:
+                print(f"Skipping {name}")
+                continue
+            try:
+                if isinstance(item, h5py.Group):
+                    new_group = dest.create_group(name)
+                    self.skip_selected_objects_recursive_in_copying_process(item, new_group, selected_options)
+                elif isinstance(item, h5py.Dataset):
+                    dest.create_dataset(name, data=item[()])
+                else:
+                    print(f"Unsupported item type: {name}")
+            except Exception as e:
+                print(f"Error processing {name}: {e}")
 
+    # %%
     def copy_to(self, destination_dir):
         try:
             # Ensure the file is opened
@@ -274,7 +273,7 @@ class HDF5Data:
         try:
             self.set_data()
             trace_keys = list(self.file['Traces'].keys())
-            self.shape_trace= np.shape(self.file[f'Traces/{trace_keys[0]}'])
+            self.shape_trace = np.shape(self.file[f'Traces/{trace_keys[0]}'])
         except Exception as e:
             print(f"Error getting shape of data: {e}")
 
@@ -310,7 +309,7 @@ class HDF5Data:
         try:
             if self.file is None:
                 self.set_data()
-            attrs =self.file['Data'].attrs.items()
+            attrs = self.file['Data'].attrs.items()
             for attr in attrs:
                 if attr[0] == 'Completed':
                     self.completed_measurement = attr[1]
@@ -383,9 +382,12 @@ class HDF5Data:
             self.set_data()
             self.set_data_shape()
             trace_keys = list(self.file['Traces'].keys())
-            traces_i = (np.array(self.file[f'Traces/{trace_keys[0]}'], dtype=np.float32).swapaxes(0, 2).flatten()).reshape(int(self.shape_data[0] * self.shape_data[-1]),
-                                                                                                         np.array(self.file[f'Traces/{trace_keys[1]}'])[0])
-            self.traces = traces_i.reshape(self.shape_data[-1], self.shape_data[0], np.array(self.file[f'Traces/{trace_keys[1]}'])[0])
+            traces_i = (
+                np.array(self.file[f'Traces/{trace_keys[0]}'], dtype=np.float32).swapaxes(0, 2).flatten()).reshape(
+                int(self.shape_data[0] * self.shape_data[-1]),
+                np.array(self.file[f'Traces/{trace_keys[1]}'])[0])
+            self.traces = traces_i.reshape(self.shape_data[-1], self.shape_data[0],
+                                           np.array(self.file[f'Traces/{trace_keys[1]}'])[0])
             traces_i = None
         except Exception as e:
             print(f"Error creating traces as array: {e}")
@@ -404,7 +406,8 @@ class HDF5Data:
             trace_order_matrix = []
             should_array_shape = (int(self.measure_dim[0]), int(np.prod(np.array(self.measure_dim)[1:])))
             trace_keys = list(self.file['Traces'].keys())
-            traces_i = (np.array(self.file[f'Traces/{trace_keys[0]}'], dtype=np.float32).swapaxes(0, 2).reshape(int(np.prod(should_array_shape)), np.array(self.file[f'Traces/{trace_keys[1]}'])[0]))
+            traces_i = (np.array(self.file[f'Traces/{trace_keys[0]}'], dtype=np.float32).swapaxes(0, 2).reshape(
+                int(np.prod(should_array_shape)), np.array(self.file[f'Traces/{trace_keys[1]}'])[0]))
             save_path = self.wdir + '/traces'
             if not os.path.exists(save_path):
                 os.makedirs(save_path)
@@ -450,7 +453,8 @@ class HDF5Data:
             self.calc_hist(nbins)
             min_max_bins = [[0, (np.max(self.bins) - np.min(self.bins)) / nbins]]
             hist_data_shape = (nbins, 1, int(self.shape_data[0] * self.shape_data[2]))
-            datasets = [np.reshape(self.hist.flatten(), hist_data_shape), np.int32(nbins), min_max_bins, time_stamp_data]
+            datasets = [np.reshape(self.hist.flatten(), hist_data_shape), np.int32(nbins), min_max_bins,
+                        time_stamp_data]
             attrs_trace_data = self.file['/'.join((tracedir, dataset_names[0]))].attrs
             self.copy_to('/Users/hubert.D/Documents/Triton3_cd_data/copy_folder')
             self.delete_data_set('Traces')
@@ -537,4 +541,3 @@ class HDF5Data:
         self.hist = None
         self.bins = None
         self.wdir = None
-

@@ -17,6 +17,8 @@ from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data
                                           correct_median_diff, correct_mean_of_lines)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap
 neon_cmap = make_neon_cyclic_colormap()
+bi_map = make_bi_colormap() # take out
+plt.register_cmap(name='BiMap', cmap=bi_map)
 plt.register_cmap(name='NeonPiCy', cmap=neon_cmap)
 rc('pdf', fonttype=42)
 
@@ -1101,4 +1103,10 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
         self.line_order_indeces = None
         self.times = None
         self.trace_selected = None
+
+
+class InteractiveTimeTraceMapPlotter(InteractiveArrayPlotter):
+    def __init__(self, root, hdf5data):
+
+        super().__init__(root, hdf5data)
 

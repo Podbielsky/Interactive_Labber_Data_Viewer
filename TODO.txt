@@ -10,10 +10,11 @@ TODO list for next versions:
 - variable range plotting for dedicated areas
 - rescaling of line-plots in the line-cut section should be improved to get better visibility
 (maybe add pastel color scheme if dependecies are not to heavy and current version of matplotlib allows for it)
-(maybe add functionality to read in .npy files with .json file as parameters,
- has to be derived class from hdf5 data class)
 (maybe add functionality to plot single traces and perform fits on them, should be done after .npy read-in works.
  Should include mulit column read in for hdf5 data and multi-trace selection.
   Implementation should be a new line plotting class which would also be used in line-cuts)
 - invert feature of update plot function does not what it should (it does not replot the data inverted but does
 transpose the internally saved data) (done)
+- BUG: if you switch to the relation parameter menu, the apply button vanishes for subsequent uses of different BG-sub.
+methods -> not urgent but would be nice to fix this
+- add possibility to create .hdf5 data which can be read in by the script from .npy data or other structured array data

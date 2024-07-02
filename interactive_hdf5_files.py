@@ -7,11 +7,16 @@ import numpy as np
 import os
 import shutil
 from HDF5Data import HDF5Data
+from interactive_plotting_tools import InteractiveHistogramPlotter
+from interactive_plotting_tools import InteractiveSlicePlotter
 from interactive_plotting_tools import InteractiveArrayPlotter
 from interactive_plotting_tools import InteractiveArrayAndLinePlotter
 
-array_plotters = []
+import traceback
 
+
+array_plotters = []
+list_name = ['Channels', 'Instrument config', 'Instruments', 'Log list', 'Settings', 'Step config', 'Step list', 'Tags', 'Views']
 
 def data_menu_bar(root, hdf5data):
     menubar = tk.Menu(root)
@@ -21,6 +26,7 @@ def data_menu_bar(root, hdf5data):
     file.add_command(label='Select File Directory', command=lambda: get_path(hdf5data))
     file.add_command(label='Move File to', command=lambda: move_data(hdf5data))
     file.add_command(label='Save File as', command=lambda: save_data_as(hdf5data))
+    file.add_command(label='Remove Selected Datasets', command=lambda: remove_selected_options_window(root, hdf5data)) #Hannah Vogel: to select datasets to be removed
     file.add_separator()
     data = tk.Menu(menubar, tearoff=0)
     menubar.add_cascade(label='Data', menu=data)
@@ -43,9 +49,53 @@ def get_path(hdf5Data):
     pth = filedialog.askopenfilename(filetypes=[("HDF5 files", "*.hdf5")])
     hdf5Data.set_path(pth, 'r')
     hdf5Data.set_filename()
+    hdf5Data.vars = []
     return pth
 
+def get_unique_filename(filepath):
+    #Returns a unique filename by appending a number if the file already exists
+    base, extension = os.path.splitext(filepath)
+    counter = 1
+    new_filepath = filepath
 
+    while os.path.exists(new_filepath):
+        new_filepath = f"{base}({counter}){extension}"
+        counter += 1
+
+    return new_filepath
+#%% Hannah Vogel
+def remove_selected_options_window(root, hdf5Data):
+    #Removes selected datasets of selected data file
+    def confirm_selection():
+        # Add option to apply the confirmed selection to the loaded file
+        selected_groups = [var.get() for var in vars if var.get()]
+        dataset = filedialog.askopenfilename(filetypes=[("HDF5 files", "*.hdf5")])
+        try:
+            src_file = h5py.File(dataset, 'r') # Öffnen der Quelldatei im Lesemodus
+            unique_dest_filepath = get_unique_filename(dataset.replace('.hdf5', '') + '_reduced.hdf5')
+            dest_file = h5py.File(unique_dest_filepath, 'w') # Öffnen oder Erstellen der Zieldatei im Schreibmodus
+            hdf5Data.skip_selected_objects_recursive_in_copying_process(src_file, dest_file, selected_groups) #uses method of class HDF5Data
+            src_file.close()
+            dest_file.close() # Schließen der Dateien nach Abschluss des Kopiervorgangs
+            newWindow.destroy()
+        except Exception as e:
+            print(f"Ein Fehler ist aufgetreten bei remove_selected_options_window: {e}")
+            traceback.print_exc()
+
+    newWindow = tk.Toplevel(root) #Opens new window (for selecting options).
+    newWindow.title("Select Datasets to Remove")
+    newWindow.geometry("300x300")
+    vars = [] #Empty list
+    for string in list_name:
+        var = tk.StringVar() #creates StringVar for every strign in list_name
+        checkbutton = tk.Checkbutton(newWindow, text=string, variable=var, onvalue=string, offvalue='') #Checkbutton widget for every string
+        checkbutton.pack(anchor='w') #Checkbuttons on the left (west)
+        vars.append(var) #Appends StringVar to list var
+
+    confirm_button = tk.Button(newWindow, text="Confirm Selection", command=confirm_selection) #Confirm button to confirm selection
+    confirm_button.pack(pady=10) #places confirm button in the window with 10 pixels distance to lower edge
+
+#%%
 def save_data_as(hdf5Data):
     pth = filedialog.askdirectory() + '/'
     hdf5Data.set_path(pth + hdf5Data.file_name, 'w')
