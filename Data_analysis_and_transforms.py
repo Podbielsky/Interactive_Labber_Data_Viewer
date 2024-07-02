@@ -141,6 +141,7 @@ def correct_mean_of_lines(img):
     return img - BG
 
 
+
 ### from down here: work in progress
 
 

@@ -25,7 +25,7 @@ changes in v0.4.4
 - aborted measurements can now be displayed
 - included background subtraction by relation parameters
 - moved derivative and 2d fft to new sub menu called "Tools"
-- added tool which allows to draw in arbitrary lines and tells staring and end position
+- added tool which allows to draw in arbitrary lines and tells starting and end position
 
 
 change in v0.4.5
@@ -33,7 +33,7 @@ change in v0.4.5
 - the start and coordinates of the lines are now rounded to the 6 digit
 - added line-wise mean correction
 - gradient now uses mean spacing of x and y coordinates do estimate the real gradient and not only the second order difference
-- added the possibility to create reduced data sets from the original .hdf5 data 
+- added the possibility to create reduced data sets from the original .hdf5 data
 - implemented a knew tool to plot time trace maps (work in progress)
 
 

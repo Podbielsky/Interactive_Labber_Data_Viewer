@@ -208,15 +208,50 @@ class HDF5Data:
             try:
                 if isinstance(item, h5py.Group):
                     new_group = dest.create_group(name)
+                    for key, value in item.attrs.items():
+                        new_group.attrs[key] = value
                     self.skip_selected_objects_recursive_in_copying_process(item, new_group, selected_options)
                 elif isinstance(item, h5py.Dataset):
-                    dest.create_dataset(name, data=item[()])
+                    # Copy datasets
+                    new_dataset = dest.create_dataset(
+                        name,
+                        data=item[()],
+                        compression=item.compression,
+                        compression_opts=item.compression_opts
+                    )
+                    # Copy attributes
+                    for key, value in item.attrs.items():
+                        new_dataset.attrs[key] = value
                 else:
                     print(f"Unsupported item type: {name}")
             except Exception as e:
                 print(f"Error processing {name}: {e}")
 
     # %%
+
+    def _copy_objects_recursive(self, src, dest):
+        for name, item in src.items():
+            if isinstance(item, h5py.Group):
+                # Recursively copy groups
+                new_group = dest.create_group(name)
+                # Copy attributes
+                for key, value in item.attrs.items():
+                    new_group.attrs[key] = value
+                self._copy_objects_recursive(item, new_group)
+            elif isinstance(item, h5py.Dataset):
+                # Copy datasets
+                new_dataset = dest.create_dataset(
+                    name,
+                    data=item[()],
+                    compression=item.compression,
+                    compression_opts=item.compression_opts
+                )
+                # Copy attributes
+                for key, value in item.attrs.items():
+                    new_dataset.attrs[key] = value
+            else:
+                print(f"Unsupported item: {name} ({type(item)})")
+
     def copy_to(self, destination_dir):
         try:
             # Ensure the file is opened

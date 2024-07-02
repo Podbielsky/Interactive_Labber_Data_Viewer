@@ -170,6 +170,7 @@ class InteractiveArrayPlotter:
         # Create Tool Menu
         self.tool_menu = tk.Menu(self.menubar, tearoff=0)
         self.tool_menu.add_command(label="Derivative along Axis", command=self.open_derivative_window)
+        self.tool_menu.add_command(label="Norm of Gradient", command=self.apply_sum_of_gradient)
         self.tool_menu.add_command(label="2-D FFT on Data", command=self.apply_2d_fft)
         self.tool_menu.add_command(label="Draw Lines", command=self.open_draw_lines_window)
         self.menubar.add_cascade(label="Tools", menu=self.tool_menu)
@@ -800,6 +801,19 @@ class InteractiveArrayPlotter:
         self.vmax = np.max(self.sliced_data)
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
+
+    def apply_sum_of_gradient(self):
+        # Calculate mean spacing between X and Y coordinates
+        dx = np.mean((np.diff(self.X, axis=1)).flatten())
+        dy = np.mean((np.diff(self.Y, axis=0)).flatten())
+        # Calculate gradient
+        self.sliced_data = np.sqrt(np.gradient(self.sliced_data, dx, dy)[0] ** 2
+                            + np.gradient(self.sliced_data, dx, dy)[1] ** 2)
+        self.vmin = np.min(self.sliced_data)
+        self.vmax = np.max(self.sliced_data)
+        self.update_histogramm()
+        self.update_pcolormesh(self.vmin, self.vmax)
+
 
     def apply_2d_fft(self):
         self.X, self.Y, self.sliced_data = two_d_fft_on_data(self.sliced_data, self.X, self.Y)
