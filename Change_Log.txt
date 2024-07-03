@@ -34,7 +34,8 @@ change in v0.4.5
 - added line-wise mean correction
 - gradient now uses mean spacing of x and y coordinates do estimate the real gradient and not only the second order difference
 - added the possibility to create reduced data sets from the original .hdf5 data
-- implemented a knew tool to plot time trace maps (work in progress)
+- implemented calculation and plotting of tunnel rates of data, which contains time traces
+
 
 
 

@@ -144,7 +144,6 @@ def correct_mean_of_lines(img):
 
 ### from down here: work in progress
 
-
 def gaussian(x, a, mu, sigma):
     '''
     :param x: 1d array for x-values
@@ -176,7 +175,9 @@ def snr_calculation(param):
     :param param: fit parameters of double gaussian in format (a1, mu1, sigma1, a2, mu2, sigma2, c)
     :return: signal-to-noise ratio according to the formula | mu1 - mu2 | / sqrt( sigma1 ** 2 + sigma2 ** 2)
     '''
-    return np.abs(param[1] - param[4]) / np.sqrt(param[3] ** 2 + param[6] ** 2)
+    # return np.abs(param[1] - param[4]) / np.sqrt(param[3] ** 2 + param[6] ** 2)
+    # return np.abs(param[1] - param[4]) / np.sqrt(param[2] ** 2 + param[5] ** 2)
+    return np.abs(param[1] - param[4]) / max(param[2], param[5])
 
 
 def det_a(snr, m, b):
@@ -238,14 +239,14 @@ def detect_events_vec(x_data, y_data, thresh_upper, thresh_lower):
 
 
 def detection_param_double_gauss_fit(bin_centers, hist, offset, width_start, bounds_gaussian, bounds_double_gaussian,
-                               peak_finder_param=(100, 30, 200, 10)):
+                                     peak_finder_param=(100, 30, 200, 10)):
     # instead of getting histograms, modify the function to create histograms.
-    hist_smoothed = gaussian_filter1d(hist, len(hist)/20)
+    hist_smoothed = gaussian_filter1d(hist, len(hist) / 20)
     hist_diff = np.diff(hist_smoothed)
     peaks, _ = find_peaks(hist_smoothed, height=peak_finder_param[0], distance=peak_finder_param[1],
                           prominence=peak_finder_param[2])
     if len(peaks) == 1:
-        peaks_diff, _ = find_peaks(np.abs(hist_diff),  height=peak_finder_param[0], distance=peak_finder_param[1],
+        peaks_diff, _ = find_peaks(np.abs(hist_diff), height=peak_finder_param[0], distance=peak_finder_param[1],
                                    prominence=peak_finder_param[2], width=peak_finder_param[3])
         if len(peaks_diff) == 2:
             snr = 0  # one has to think about this setting
@@ -276,6 +277,42 @@ def detection_param_double_gauss_fit(bin_centers, hist, offset, width_start, bou
         snr = snr_calculation(popt)
 
     else:
-        return None # currently I have not better idea, maybe set some default parameters
+        return None  # currently I have not better idea, maybe set some default parameters
 
     return bin_centers, hist, popt, snr
+
+
+def moving_average(data, window_size):
+    half_window = window_size // 2
+    smoothed_data = np.zeros_like(data)
+    for i in range(half_window, len(data) - half_window):
+        smoothed_data[i] = np.mean(data[i - half_window: i + half_window + 1])
+    return smoothed_data
+
+
+def fit_double_gaussian(x_data, y_data, p0, bounds):
+    try:
+        params, cov = curve_fit(double_gaussian, x_data, y_data, p0, bounds=bounds)
+
+    except RuntimeError:
+        params, cov = np.zeros(7), 0
+
+    return params, cov
+
+
+def gamma(t_list):
+    try:
+        t_mean = np.mean(t_list)
+        t_s = np.std(t_list)
+        gamma = 1 / t_mean
+        gamma_s = gamma * t_s / t_mean
+
+    except (TypeError, ZeroDivisionError, ValueError):
+        print("Error occured")
+        gamma = float("NaN")
+        gamma_s = float("NaN")
+
+    return gamma, gamma_s
+
+
+

@@ -15,6 +15,7 @@ from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 from scipy.ndimage import gaussian_filter
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, evaluate_poly_background_2d,
                                           correct_median_diff, correct_mean_of_lines)
+from gamma_map import (get_t_rates, get_fourier, fft_correction_select, fft_correction_apply, get_cuts)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap
 neon_cmap = make_neon_cyclic_colormap()
 bi_map = make_bi_colormap() # take out
@@ -147,6 +148,26 @@ class InteractiveArrayPlotter:
         self.root = root
         self.root.title("Interactive Array Plotter")
 
+        # Initialize attributes
+        self.data = hdf5data
+        #### Created by Nico R.  for trace loading validation
+        self.contains_traces = 'Traces' in list(hdf5data.file.keys())
+        ####
+        self.name_data_z = ''
+        self.name_data_y_axis = ''
+        self.name_data_x_axis = ''
+        self.num_dimensions = len(self.data.measure_dim) - 2
+        self.name_data = [str(label) for label in self.data.name_data]
+        self.name_data = [label.encode('utf-8').decode('utf-8') for label in self.name_data]
+        if self.contains_traces:
+            self.name_data.append("Tunneling rates in")
+            self.name_data.append("Tunneling rates out")
+        self.x_index = 0
+        self.y_index = 0
+        self.nan_mask = np.array([])
+        self.loaded = False
+        self.calculated = False
+
         # Create Menu Bar
         self.menubar = tk.Menu(self.root)
         self.root.config(menu=self.menubar)
@@ -173,6 +194,8 @@ class InteractiveArrayPlotter:
         self.tool_menu.add_command(label="Norm of Gradient", command=self.apply_sum_of_gradient)
         self.tool_menu.add_command(label="2-D FFT on Data", command=self.apply_2d_fft)
         self.tool_menu.add_command(label="Draw Lines", command=self.open_draw_lines_window)
+        if self.contains_traces:
+            self.tool_menu.add_command(label="Correct Trace Fourier spectrum", command=self.open_fft_trace_correction_window)
         self.menubar.add_cascade(label="Tools", menu=self.tool_menu)
 
         # Create Help Menu
@@ -180,17 +203,6 @@ class InteractiveArrayPlotter:
         self.help_menu.add_command(label="About", command=self.show_about)
         self.menubar.add_cascade(label="Help", menu=self.help_menu)
 
-        # Initialize attributes
-        self.data = hdf5data
-        self.name_data_z = ''
-        self.name_data_y_axis = ''
-        self.name_data_x_axis = ''
-        self.num_dimensions = len(self.data.measure_dim) - 2
-        self.name_data = [str(label) for label in self.data.name_data]
-        self.name_data = [label.encode('utf-8').decode('utf-8') for label in self.name_data]
-        self.x_index = 0
-        self.y_index = 0
-        self.nan_mask = np.array([])
         # Create a figure and axis for plotting
 
         if figure is None or ax is None:
@@ -322,9 +334,34 @@ class InteractiveArrayPlotter:
             self.X = (np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])
             self.nan_mask = ~np.isnan(self.X).any(axis=1)
             self.X = self.X[self.nan_mask]
-            self.Y = (np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
-            self.sliced_data = ((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
+            self.Y = (np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(
                 0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
+            try:
+                self.sliced_data = ((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
+                    0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
+            except IndexError:
+                if not self.loaded:
+                    print('fetching data...')
+                    self.data.set_traces()
+                    self.data.set_traces_dt()
+                    self.traces = self.data.traces
+                    self.times = self.data.traces_dt * np.arange(0, len(self.traces[0][0]))
+                    self.loaded = True
+                else:
+                    pass
+
+                if not self.calculated:
+                    print('calculating tunneling rates...')
+                    _, self.gamma_up, self.gamma_down = get_t_rates(self.traces, self.times)
+                    self.calculated = True
+                else:
+                    pass
+
+                if self.data_combobox.get() == "Tunneling rates in":
+                    self.sliced_data = self.gamma_up
+                elif self.data_combobox.get() == "Tunneling rates out":
+                    self.sliced_data = self.gamma_down
+
             self.ax.clear()
             self.xlim = (np.min(self.X), np.max(self.X))
             self.ylim = (np.min(self.Y), np.max(self.Y))
@@ -332,7 +369,7 @@ class InteractiveArrayPlotter:
             self.name_data_z = self.data_combobox.get()
             self.name_data_x_axis = str(np.flip(self.data.name_axis)[-1])
             self.name_data_y_axis = str(np.flip(self.data.name_axis)[-2])
-
+        #### Modified by Nico R. ####
         if self.invert_enabled:
             self.X = ((np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(0, 1).reshape(
                 np.flip(self.data.measure_dim))[tuple(selected_indices)]))
@@ -341,9 +378,35 @@ class InteractiveArrayPlotter:
 
             self.Y = ((np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(
                 np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]).T
-            self.sliced_data = (((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
-                0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]).T
+            # self.sliced_data = (((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
+            #     0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]).T
 
+            try:
+                self.sliced_data = ((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
+                    0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
+            except IndexError:
+                if not self.loaded:
+                    print('fetching data...')
+                    self.data.set_traces()
+                    self.data.set_traces_dt()
+                    self.traces = self.data.traces
+                    self.times = self.data.traces_dt * np.arange(0, len(self.traces[0][0]))
+                    self.loaded = True
+                else:
+                    pass
+
+                if not self.calculated:
+                    print('calculating tunneling rates...')
+                    _, self.gamma_up, self.gamma_down = get_t_rates(self.traces, self.times)
+                    self.calculated = True
+                else:
+                    pass
+
+                if self.data_combobox.get() == "Tunneling rates in":
+                    self.sliced_data = self.gamma_up.transpose()
+                elif self.data_combobox.get() == "Tunneling rates out":
+                    self.sliced_data = self.gamma_down.transpose()
+            #### end of Modification by Nico R. ####
             self.ax.clear()
             self.xlim = (np.min(self.X), np.max(self.X))
             self.ylim = (np.min(self.Y), np.max(self.Y))
@@ -719,6 +782,41 @@ class InteractiveArrayPlotter:
         self.data_axis_transform_naming_frame.pack(side=tk.LEFT)
         self.data_axis_transform_scaling_frame.pack(side=tk.RIGHT)
 
+    def open_fft_trace_correction_window(self):
+        #### Created by Nico R. ####
+        # Create a new Toplevel window
+        self.fft_plot_window = tk.Toplevel(self.root)
+        self.fft_plot_window.title("FFT Correction")
+
+        # Create a Matplotlib figure and axis
+        self.fft_fig, self.fft_ax = plt.subplots(1, 1)
+
+        # Create a canvas to embed the figure into the Tkinter window
+        self.fft_canvas = FigureCanvasTkAgg(self.fft_fig, master=self.fft_plot_window)
+        self.fft_canvas.draw()
+
+        self.fft_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+        self.toolbar = NavigationToolbar2Tk(self.fft_canvas, self.fft_plot_window)
+        self.toolbar.update()
+        self.canvas._tkcanvas.pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+
+        if self.loaded:
+            pass
+        else:
+            print('fetching data...')
+            self.data.set_traces()
+            self.data.set_traces_dt()
+            self.traces = self.data.traces
+            self.times = self.data.traces_dt * np.arange(0, len(self.traces[0][0]))
+            self.loaded = True
+
+        self.frequencies_shifted, self.fft_mean, self.fft_signals, self.original_angles = get_fourier(self.traces,
+                                                                                                      self.times)
+        fft_correction_select(self.frequencies_shifted, self.fft_mean, self.fft_fig, self.fft_ax)
+
+        open_plot_button = ttk.Button(self.fft_plot_window, text="Apply changes", command=self.apply_fft_trace_correction)
+        open_plot_button.pack(pady=20)
+
     def apply_data_axis_transform(self):
         self.name_data_x_axis = str(self.x_axis_name_input.get())
         self.name_data_y_axis = str(self.y_axis_name_input.get())
@@ -814,7 +912,6 @@ class InteractiveArrayPlotter:
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
-
     def apply_2d_fft(self):
         self.X, self.Y, self.sliced_data = two_d_fft_on_data(self.sliced_data, self.X, self.Y)
         self.name_data_z = 'FFT Amp of ' + self.name_data_z
@@ -826,6 +923,17 @@ class InteractiveArrayPlotter:
         self.vmax = np.max(self.sliced_data)
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
+
+    def apply_fft_trace_correction(self):
+        #### Modified by Nico R. ####
+        self.cuts = get_cuts(self.fft_ax)
+        print(self.cuts)
+        plt.close(self.fft_fig)
+
+        self.traces = fft_correction_apply(self.traces, self.cuts, self.frequencies_shifted, self.fft_signals,
+                                           self.original_angles)
+        self.fft_plot_window.destroy()
+        self.fft_plot_window.update()
 
     def activate_line_drawing(self):
         self.click_cid = self.canvas.mpl_connect('button_press_event', self.on_canvas_click)
