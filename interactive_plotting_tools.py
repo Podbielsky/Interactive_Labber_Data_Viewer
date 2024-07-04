@@ -378,12 +378,9 @@ class InteractiveArrayPlotter:
 
             self.Y = ((np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(
                 np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]).T
-            # self.sliced_data = (((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
-            #     0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]).T
-
             try:
-                self.sliced_data = ((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
-                    0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
+                self.sliced_data = (((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
+                    0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]).T
             except IndexError:
                 if not self.loaded:
                     print('fetching data...')
@@ -398,6 +395,8 @@ class InteractiveArrayPlotter:
                 if not self.calculated:
                     print('calculating tunneling rates...')
                     _, self.gamma_up, self.gamma_down = get_t_rates(self.traces, self.times)
+                    self.gamma_up.T
+                    self.gamma_down.T
                     self.calculated = True
                 else:
                     pass
