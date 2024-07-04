@@ -4,11 +4,10 @@ Created on Mon Jun 17 17:23:55 2024
 
 @author: Nico Reinders
 """
-#%%
+
 from matplotlib import pyplot as plt
 import numpy as np
 import Data_analysis_and_transforms as lib
-
 import time
 from scipy.signal import find_peaks
 from numba import njit
@@ -31,7 +30,7 @@ def get_threshholds(trace, debugging=False): #get the threshholds of a given tra
     n_bins = 150
     
     #make a histogramm of the trace value distribution to determine high and low signal
-    hist, bins = np.histogram(trace, bins = n_bins, density = False)
+    hist, bins = np.histogram(trace, bins=n_bins, density=False)
     bin_centers = 0.5*(bins[1:] + bins[:-1])
     hist = hist/np.max(hist) #normalize histogramm 
     hist_smoothed = lib.moving_average(hist, 5) # smooth histogram data, might have to be adjusted depending on nb of bins
@@ -79,19 +78,18 @@ def get_threshholds(trace, debugging=False): #get the threshholds of a given tra
         print(params)
         fig, ax = plt.subplots(1, 1)
         if params.all() != 0 and len(peaks) >= 1:   
-            ax.scatter(bin_centers,hist_smoothed/1e4, s = 0.5)
-            ax.plot(bin_centers, lib.double_gaussian(bin_centers, *params)/1e4)#
-            ax.plot(bin_centers, lib.gaussian(bin_centers, *params[0:3])/1e4)#
-            ax.plot(bin_centers, lib.gaussian(bin_centers, *params[3:6])/1e4)#    
+            ax.scatter(bin_centers,hist_smoothed/1e4, s=0.5)
+            ax.plot(bin_centers, lib.double_gaussian(bin_centers, *params)/1e4)
+            ax.plot(bin_centers, lib.gaussian(bin_centers, *params[0:3])/1e4)
+            ax.plot(bin_centers, lib.gaussian(bin_centers, *params[3:6])/1e4)
             ax.axvline(thresh_lower, color='g')
             ax.axvline(thresh_upper, color='r')
-        else: ax.scatter(bin_centers,hist_smoothed/1e4, s = 0.5)
+        else: ax.scatter(bin_centers,hist_smoothed/1e4, s=0.5)
         
         for peak_index in peaks:
              ax.axvline(x=bin_centers[peak_index])
     
     return snr, thresh_lower, thresh_upper
-
 
 
 def get_t_rates(traces, time_axis):
@@ -121,9 +119,6 @@ def get_t_rates(traces, time_axis):
                 gamma_up_array[i][j] = np.nan
                 gamma_down_array[i][j] = np.nan
     return snr_array, gamma_up_array, gamma_down_array
-
-
-
 
 # calculate the fourier spectrums for manual denoising later 
 # def get_fourier(trace, time_axis):
@@ -162,10 +157,9 @@ def get_fourier(traces, time_axis):
     fft_mean = fft_mean/np.max(fft_mean)
     return frequencies_shifted, fft_mean, fft_signals, original_angles
 
-
-
 #%% 
 #FFT correction 
+
 
 def fft_correction_select(frequencies_shifted, fft_mean, fig, axs):
     backup_fft_mean = np.copy(fft_mean)
@@ -240,11 +234,13 @@ def fft_correction_select(frequencies_shifted, fft_mean, fig, axs):
     fig.canvas.mpl_connect('button_release_event', on_release)
     fig.canvas.mpl_connect('key_press_event', on_key_press)
     #plt.show(block=True)
-    
+
+
 def get_cuts(ax):    
     xs = ax.get_lines()[2::]
     cuts = np.array([np.ravel(line.get_xdata())[0] for line in xs])
     return cuts
+
 
 def fft_correction_apply(traces, cuts, frequencies_shifted, fft_signals, original_angles):
    

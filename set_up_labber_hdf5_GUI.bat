@@ -17,7 +17,7 @@ IF EXIST "%ENV_NAME%\Scripts\activate.bat" (
 
     REM Install required packages
     echo Installing required packages...
-    pip install numpy==1.22.4 scipy==1.7.1 matplotlib==3.4.3 h5py
+    pip install numpy==1.22.4 scipy==1.7.1 matplotlib==3.4.3 numba==0.58.1 h5py
 
     echo Required packages installed successfully.
 
@@ -27,6 +27,7 @@ IF EXIST "%ENV_NAME%\Scripts\activate.bat" (
     copy "%~dp0interactive_plotting_tools.py" "%ENV_NAME%\Scripts"
     copy "%~dp0Data_analysis_and_transforms.py" "%ENV_NAME%\Scripts"
     copy "%~dp0custom_cmap.py" "%ENV_NAME%\Scripts"
+    copy "%~dp0gamma_map.py" "%ENV_NAME%\Scripts"
 
     echo Python script copied successfully.
 
