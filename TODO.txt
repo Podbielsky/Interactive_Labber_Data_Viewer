@@ -7,6 +7,7 @@ TODO list for next versions:
     - should be easier than the point before, but you have to think about how the data structure is handled
 
 - deprecate histogram map function and add functionality of plotting histogram map to trace plotter class (part of SNR)
+ (also clean up HDF5Data class)
 
 - implement a knew tool to plot time trace maps
 
@@ -20,7 +21,11 @@ TODO list for next versions:
  Should include mulit column read in for hdf5 data and multi-trace selection.
   Implementation should be a new line plotting class which would also be used in line-cuts)
 
+- low priority: implement multithreading for i/o and calculation to create a smoother experience
+
 
 - BUG: if you switch to the relation parameter menu, the apply button vanishes for subsequent uses of different BG-sub.
 methods -> not urgent but would be nice to fix this
+
+- BUG (at least on Windows): Relation parameters do not work after it was once applied and another dataset is loaded in
 
