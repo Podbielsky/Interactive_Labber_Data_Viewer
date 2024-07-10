@@ -3,7 +3,7 @@ Installation Instruction for Windows Systems (19.02.2024, v0.4.4)
 - Install a Version of Python 3.9 from the official Python webpage, make sure it is the 64-bit version
 
 - Be sure, that the Python folder is located in the %USERPROFILE%\AppData\Local\Programs directory and is called
-  Python39. Do not at the path to this python distribution to your system PATH to ensure no crosstalk between
+  Python39. Do not add the path to this python distribution to your system PATH to ensure no crosstalk between
   already existing Python versions on your machine
 
 - be sure that set_up_labber_hdf5_GUI.bat is in the same directory as all 4 python scripts
