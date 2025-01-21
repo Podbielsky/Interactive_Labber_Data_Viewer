@@ -7,10 +7,9 @@ import numpy as np
 import os
 import shutil
 from HDF5Data import HDF5Data
-from interactive_plotting_tools import InteractiveHistogramPlotter
-from interactive_plotting_tools import InteractiveSlicePlotter
 from interactive_plotting_tools import InteractiveArrayPlotter
 from interactive_plotting_tools import InteractiveArrayAndLinePlotter
+from creating_hdf5_files_from_npy_files import CreateHDF5File
 
 import traceback
 
@@ -26,6 +25,7 @@ def data_menu_bar(root, hdf5data):
     file.add_command(label='Select File Directory', command=lambda: get_path(hdf5data))
     file.add_command(label='Move File to', command=lambda: move_data(hdf5data))
     file.add_command(label='Save File as', command=lambda: save_data_as(hdf5data))
+    file.add_command(label='Create a HDF5 File from Numpy Files', command=lambda : create_hdf5_files_from_npy(root))
     file.add_command(label='Remove Selected Datasets', command=lambda: remove_selected_options_window(root, hdf5data)) #Hannah Vogel: to select datasets to be removed
     file.add_separator()
     data = tk.Menu(menubar, tearoff=0)
@@ -136,6 +136,11 @@ def create_data_array(hdf5Data):
     channel_names = [str(name_i[0]) for name_i in hdf5Data.array_tags]
     np.save(pth + base_name + '_tags_.npy', channel_names, allow_pickle=True)
     np.save(pth + new_filename, hdf5Data.arrays, allow_pickle=True)
+
+def create_hdf5_files_from_npy(root):
+    new_window = tk.Toplevel(root)
+    new_window.title("Create HDF5 file")
+    CreateHDF5File(new_window)
 
 def plot_array(hdf5Data, root):
     new_window = tk.Toplevel(root)

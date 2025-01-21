@@ -6,7 +6,7 @@ Installation Instruction for Windows Systems (19.02.2024, v0.4.4)
   Python39. Do not add the path to this python distribution to your system PATH to ensure no crosstalk between
   already existing Python versions on your machine
 
-- be sure that set_up_labber_hdf5_GUI.bat is in the same directory as all 4 python scripts
+- be sure that set_up_labber_hdf5_GUI.bat is in the same directory as all 5 python scripts
 
 - click on the set_up_labber_hdf5_GUI.bat, it should execute in the windows command line tool.
 

@@ -14,7 +14,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 from scipy.ndimage import gaussian_filter
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, evaluate_poly_background_2d,
-                                          correct_median_diff, correct_mean_of_lines)
+                                          correct_median_diff, correct_mean_of_lines, gradient_5p_stencil)
 from gamma_map import (get_t_rates, get_fourier, fft_correction_select, fft_correction_apply, get_cuts)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap
 neon_cmap = make_neon_cyclic_colormap()
@@ -25,7 +25,7 @@ rc('pdf', fonttype=42)
 
 
 class InteractiveSlicePlotter:
-    # class is depracted and should not be used in further code put is left as an example
+    # class is depracted and should not be used in further code but is left as an example
     def __init__(self, root, data):
         self.root = root
         self.root.title("Interactive Slice through 3D Array")
@@ -81,7 +81,7 @@ class InteractiveSlicePlotter:
 
 
 class InteractiveHistogramPlotter:
-    # class is depracted and should not be used in further code put is left as an example
+    # class is depracted and should not be used in further code but is left as an example
     def __init__(self, root, data, nbins):
         self.root = root
         self.root.title("Interactive Histogram Plotter")
@@ -165,7 +165,7 @@ class InteractiveArrayPlotter:
         self.x_index = 0
         self.y_index = 0
         self.nan_mask = np.array([])
-        self.loaded = False
+        self.loaded = False # rename to be more discriptiv
         self.calculated = False
 
         # Create Menu Bar

@@ -35,6 +35,7 @@ change in v0.4.5
 - gradient now uses mean spacing of x and y coordinates do estimate the real gradient and not only the second order difference
 - added the possibility to create reduced data sets from the original .hdf5 data
 - implemented calculation and plotting of tunnel rates of data, which contains time traces
+- implemented creation of compatible .hdf5 files from numpy files containing 2D-arrays
 
 
 

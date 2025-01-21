@@ -1,6 +1,6 @@
 import numpy as np
 from scipy import interpolate
-from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage import gaussian_filter1d, gaussian_filter
 from scipy.signal import find_peaks
 from scipy.optimize import curve_fit
 from scipy.fft import fft2, fftfreq, fftshift
@@ -139,6 +139,191 @@ def correct_mean_of_lines(img):
 
     BG = np.mean(img, axis=1, keepdims=True)
     return img - BG
+
+
+def subtract_trace_average(img, n, axis=0, from_end=False, use_filter=False, poly_fit=False,
+                           filter_sigma=1.0, poly_fit_order=1):
+    '''
+    Subtract the average trace from the data.
+
+    :param img: 2D numpy array representing the image to be corrected
+    :param n: Number of traces to compute the average from.
+    :param axis: The axis to consider for traces (0 or 1).
+    :param from_end: If True, use the last `n` traces instead of the first.
+    :param use_filter: If True, use filtered traces for subtraction
+    :param poly_fit: If True, subtract the fitted polynomial function instead of averaged traces
+    :param filter_sigma: Width of the gaussian filter function
+    :param poly_fit_order: Order of the fitted Polynomial
+    :return: 2D numpy array of the corrected image.
+    '''
+    if axis not in (0, 1):
+        raise ValueError("Axis must be 0 (rows) or 1 (columns).")
+    if n <= 0 or n > img.shape[axis]:
+        raise ValueError("Invalid value for n: must be between 1 and the size of the specified axis.")
+
+    # Select the traces for averaging
+    else:
+        if from_end:
+            if axis == 0:
+                traces = img[-n:, :]
+            else:
+                traces = img[:, -n:]
+        else:
+            if axis == 0:
+                traces = img[:n, :]
+            else:
+                traces = img[:, :n]
+
+    # Compute the average trace
+    avg_trace = np.mean(traces, axis=axis, keepdims=True)
+    if use_filter:
+        if axis == 0:
+            avg_trace = gaussian_filter1d(avg_trace, filter_sigma)
+        else:
+            avg_trace = gaussian_filter1d(avg_trace, filter_sigma)
+    else:
+        pass
+
+    if poly_fit:
+        x = np.arange(0, np.shape(avg_trace)[0])
+        y = np.arange(0, np.shape(avg_trace)[1])
+        xg, yg = np.meshgrid(y, x)
+        print(np.shape(xg))
+        avg_trace = evaluate_poly_background_2d(xg, yg, avg_trace, poly_fit_order, 0)
+    else:
+        pass
+    # Subtract the average trace from the data
+    return img - avg_trace
+
+
+def gradient_5p_stencil(f, *varargs, axis=None, edge_order=1):
+    #### 5-point stencil method for gradient calculation, base code adapted from numpy.gradient
+    f = np.asanyarray(f)
+    N = f.ndim  # number of dimensions
+
+    if axis is None:
+        axes = tuple(range(N))
+    else:
+        axes = np.lib.array_utils.normalize_axis_tupl(axis, N)
+
+    len_axes = len(axes)
+    n = len(varargs)
+    if n == 0:
+        dx = [1.0] * len_axes
+    elif n == 1 and np.ndim(varargs[0]) == 0:
+        dx = varargs * len_axes
+    elif n == len_axes:
+        dx = list(varargs)
+        for i, distances in enumerate(dx):
+            distances = np.asanyarray(distances)
+            if distances.ndim == 0:
+                continue
+            elif distances.ndim != 1:
+                raise ValueError("distances must be either scalars or 1d")
+            if len(distances) != f.shape[axes[i]]:
+                raise ValueError("when 1d, distances must match "
+                                 "the length of the corresponding dimension")
+            if np.issubdtype(distances.dtype, np.integer):
+                distances = distances.astype(np.float64)
+            diffx = np.diff(distances)
+            if (diffx == diffx[0]).all():
+                diffx = diffx[0]
+            dx[i] = diffx
+    else:
+        raise TypeError("invalid number of arguments")
+
+    if edge_order > 2:
+        raise ValueError("'edge_order' greater than 2 not supported")
+
+    outvals = []
+
+    slice1 = [slice(None)]*N
+    slice2 = [slice(None)]*N
+    slice3 = [slice(None)]*N
+    slice4 = [slice(None)]*N
+    slice5 = [slice(None)]*N
+    slice6 = [slice(None)]*N
+
+    otype = f.dtype
+    if otype.type is np.datetime64:
+        otype = np.dtype(otype.name.replace('datetime', 'timedelta'))
+        f = f.view(otype)
+    elif otype.type is np.timedelta64:
+        pass
+    elif np.issubdtype(otype, np.inexact):
+        pass
+    else:
+        if np.issubdtype(otype, np.integer):
+            f = f.astype(np.float64)
+        otype = np.float64
+
+    for axis, ax_dx in zip(axes, dx):
+        if f.shape[axis] < 5:
+            raise ValueError(
+                "Shape of array too small to calculate a numerical gradient using five-point stencil, "
+                "at least 5 elements are required.")
+
+        out = np.empty_like(f, dtype=otype)
+
+        uniform_spacing = np.ndim(ax_dx) == 0
+
+        slice1[axis] = slice(2, -2)
+        slice2[axis] = slice(None, -4)
+        slice3[axis] = slice(1, -3)
+        slice4[axis] = slice(3, -1)
+        slice5[axis] = slice(4, None)
+
+        if uniform_spacing:
+            out[tuple(slice1)] = (-f[tuple(slice5)] + 8 * f[tuple(slice4)] - 8 * f[tuple(slice3)] + f[tuple(slice2)]) / (12. * ax_dx)
+        else:
+            dx1 = ax_dx[1:-2]
+            dx2 = ax_dx[2:-1]
+            dx3 = ax_dx[3:]
+            a = -1 / (12 * dx1)
+            b = 8 / (12 * dx2)
+            c = -8 / (12 * dx2)
+            d = 1 / (12 * dx3)
+            shape = np.ones(N, dtype=int)
+            shape[axis] = -1
+            a.shape = b.shape = c.shape = d.shape = shape
+            out[tuple(slice1)] = (a * f[tuple(slice2)] + b * f[tuple(slice3)] - b * f[tuple(slice4)] + d * f[tuple(slice5)])
+
+        # First order difference at edges
+        slice1[axis] = 0
+        slice2[axis] = 0
+        slice3[axis] = 1
+        dx_0 = ax_dx if uniform_spacing else ax_dx[0]
+        out[tuple(slice1)] = (f[tuple(slice3)] - f[tuple(slice2)]) / dx_0
+
+        slice1[axis] = 1
+        slice2[axis] = 0
+        slice3[axis] = 2
+        out[tuple(slice1)] = (f[tuple(slice3)] - f[tuple(slice2)]) / (ax_dx if uniform_spacing else ax_dx[1])
+
+        slice1[axis] = -2
+        slice2[axis] = -3
+        slice3[axis] = -1
+        out[tuple(slice1)] = (f[tuple(slice3)] - f[tuple(slice2)]) / (ax_dx if uniform_spacing else ax_dx[-2])
+
+        slice1[axis] = -1
+        slice2[axis] = -2
+        slice3[axis] = -1
+        dx_n = ax_dx if uniform_spacing else ax_dx[-1]
+        out[tuple(slice1)] = (f[tuple(slice3)] - f[tuple(slice2)]) / dx_n
+
+        outvals.append(out)
+
+        slice1[axis] = slice(None)
+        slice2[axis] = slice(None)
+        slice3[axis] = slice(None)
+        slice4[axis] = slice(None)
+        slice5[axis] = slice(None)
+        slice6[axis] = slice(None)
+
+    if len_axes == 1:
+        return outvals[0]
+    return tuple(outvals)
+
 
 
 

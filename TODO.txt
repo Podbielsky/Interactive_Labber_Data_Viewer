@@ -1,21 +1,24 @@
 TODO list for next versions:
 
- - re-write more parts of the code either in cython or fortran, but test windows handling beforehand
-   - think about installation handling if no matching compiler for cython or fortran could be found
-
-- add snr calc for multi parameter maps based on bimodal gaussian distribution (IMPORTANT)
+- add snr calc for multi parameter maps based on bimodal gaussian distribution
     - should be easier than the point before, but you have to think about how the data structure is handled
 
 - deprecate histogram map function and add functionality of plotting histogram map to trace plotter class (part of SNR)
  (also clean up HDF5Data class)
 
-- implement a knew tool to plot time trace maps
+- implement a new tool to plot time trace maps
+
+- implement external traces
 
 - variable range plotting for dedicated areas
 
 - rescaling of line-plots in the line-cut section should be improved to get better visibility
 
-- add possibility to create .hdf5 data which can be read in by the script from .npy data or other structured array data
+- implement first/last few line average subtraction
+
+- implement fourier filter
+
+- implement removal of meta-data for whole directory
 
 (maybe add functionality to plot single traces and perform fits on them, should be done after .npy read-in works.
  Should include mulit column read in for hdf5 data and multi-trace selection.
@@ -23,9 +26,10 @@ TODO list for next versions:
 
 - low priority: implement multithreading for i/o and calculation to create a smoother experience
 
-
 - BUG: if you switch to the relation parameter menu, the apply button vanishes for subsequent uses of different BG-sub.
 methods -> not urgent but would be nice to fix this
 
 - BUG (at least on Windows): Relation parameters do not work after it was once applied and another dataset is loaded in
+
+- BUG Installation does not work on certain Windows desktops (no clue why)
 

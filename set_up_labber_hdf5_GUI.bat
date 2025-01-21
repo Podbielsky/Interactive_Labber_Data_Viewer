@@ -17,12 +17,13 @@ IF EXIST "%ENV_NAME%\Scripts\activate.bat" (
 
     REM Install required packages
     echo Installing required packages...
-    pip install numpy==1.22.4 scipy==1.7.1 matplotlib==3.4.3 numba==0.58.1 h5py
+    pip install numpy==1.22.4 scipy==1.7.1 matplotlib==3.4.3 numba==0.58.1 h5py tkinterdnd2
 
     echo Required packages installed successfully.
 
     REM Copy Python scripts to the Scripts directory of the virtual environment
     copy "%~dp0interactive_hdf5_files.py" "%ENV_NAME%\Scripts"
+    copy "%~dp0creatinghdf5_files_from_npy_files.py" "%ENV_NAME%\Scripts"
     copy "%~dp0HDF5Data.py" "%ENV_NAME%\Scripts"
     copy "%~dp0interactive_plotting_tools.py" "%ENV_NAME%\Scripts"
     copy "%~dp0Data_analysis_and_transforms.py" "%ENV_NAME%\Scripts"
