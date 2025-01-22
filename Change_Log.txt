@@ -36,7 +36,9 @@ change in v0.4.5
 - added the possibility to create reduced data sets from the original .hdf5 data
 - implemented calculation and plotting of tunnel rates of data, which contains time traces
 - implemented creation of compatible .hdf5 files from numpy files containing 2D-arrays
-- implemented ROI selection 
+- implemented ROI selection
+- implemented BG correction via subtraction of first or last trace
+
 
 
 

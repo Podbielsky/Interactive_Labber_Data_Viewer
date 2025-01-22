@@ -14,7 +14,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 from scipy.ndimage import gaussian_filter
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, evaluate_poly_background_2d,
-                                          correct_median_diff, correct_mean_of_lines, gradient_5p_stencil)
+                                          correct_median_diff, correct_mean_of_lines, gradient_5p_stencil,
+                                          subtract_trace_average)
 from gamma_map import (get_t_rates, get_fourier, fft_correction_select, fft_correction_apply, get_cuts)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap
 neon_cmap = make_neon_cyclic_colormap()
@@ -230,7 +231,8 @@ class InteractiveArrayPlotter:
         # Define interactive button options
         self.colormaps = ['viridis', 'plasma', 'inferno', 'magma', 'cividis', 'twilight', 'coolwarm', 'Spectral',
                           'gnuplot', 'NeonPiCy', 'BiMap']
-        self.bg_methods = ['Polynomial', 'Median Difference', 'Mean of Lines', 'Relation Parameters']
+        self.bg_methods = ['Polynomial', 'Median Difference', 'Mean of Lines', 'Relation Parameters',
+                           'Subtract Trace Average']
         self.relation_parameter_entry_list = []
         self.drawn_lines_list = []
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.root)
@@ -788,6 +790,46 @@ class InteractiveArrayPlotter:
                 entry.grid(row=i, column=1)
                 self.relation_parameter_entry_list.append(entry)
 
+        elif selected_method == 'Subtract Trace Average':
+            # Add input fields for the `subtract_trace_average` function
+            tk.Label(self.method_input_frame, text="Number of Traces (n):").pack()
+            self.n_traces_entry = tk.Entry(self.method_input_frame)
+            self.n_traces_entry.pack()
+            self.n_traces_entry.insert(0, "1")  # Default value
+
+            tk.Label(self.method_input_frame, text="Axis (0 for rows, 1 for columns):").pack()
+            self.axis_entry = tk.Entry(self.method_input_frame)
+            self.axis_entry.pack()
+            self.axis_entry.insert(0, "0")  # Default value
+
+            tk.Label(self.method_input_frame, text="From End (True/False):").pack()
+            self.from_end_var = tk.StringVar(value="False")
+            self.from_end_checkbox = tk.Checkbutton(self.method_input_frame, text="From End",
+                                                    variable=self.from_end_var, onvalue="True", offvalue="False")
+            self.from_end_checkbox.pack()
+
+            tk.Label(self.method_input_frame, text="Use Gaussian Filter (True/False):").pack()
+            self.use_filter_var = tk.StringVar(value="False")
+            self.use_filter_checkbox = tk.Checkbutton(self.method_input_frame, text="Use Filter",
+                                                      variable=self.use_filter_var, onvalue="True", offvalue="False")
+            self.use_filter_checkbox.pack()
+
+            tk.Label(self.method_input_frame, text="Polynomial Fit (True/False):").pack()
+            self.poly_fit_var = tk.StringVar(value="False")
+            self.poly_fit_checkbox = tk.Checkbutton(self.method_input_frame, text="Polynomial Fit",
+                                                    variable=self.poly_fit_var, onvalue="True", offvalue="False")
+            self.poly_fit_checkbox.pack()
+
+            tk.Label(self.method_input_frame, text="Filter Sigma:").pack()
+            self.filter_sigma_entry = tk.Entry(self.method_input_frame)
+            self.filter_sigma_entry.pack()
+            self.filter_sigma_entry.insert(0, "1.0")  # Default value
+
+            tk.Label(self.method_input_frame, text="Polynomial Fit Order:").pack()
+            self.poly_fit_order_entry = tk.Entry(self.method_input_frame)
+            self.poly_fit_order_entry.pack()
+            self.poly_fit_order_entry.insert(0, "1")  # Default value
+
         elif selected_method == 'Median Difference':
             pass
 
@@ -809,6 +851,9 @@ class InteractiveArrayPlotter:
 
         elif selected_method == 'Mean of Lines':
             self.apply_mean_of_lines()
+
+        elif selected_method == 'Subtract Trace Average':
+            self.apply_subtract_trace_average()
 
     def open_derivative_window(self):
 
@@ -957,6 +1002,32 @@ class InteractiveArrayPlotter:
                             np.float64(self.relation_parameter_entry_list[2].get()) *
                             self.Y ** np.float64(self.relation_parameter_entry_list[3].get())
                             + np.float64(self.relation_parameter_entry_list[4].get()))
+        self.vmin = np.min(self.sliced_data)
+        self.vmax = np.max(self.sliced_data)
+        self.update_histogramm()
+        self.update_pcolormesh(self.vmin, self.vmax)
+
+    def apply_subtract_trace_average(self):
+        # Extract parameters from input fields
+        n = int(self.n_traces_entry.get())
+        axis = int(self.axis_entry.get())
+        from_end = self.from_end_var.get() == "True"
+        use_filter = self.use_filter_var.get() == "True"
+        poly_fit = self.poly_fit_var.get() == "True"
+        filter_sigma = float(self.filter_sigma_entry.get())
+        poly_fit_order = int(self.poly_fit_order_entry.get())
+
+        # Apply the `subtract_trace_average` function
+        self.sliced_data = subtract_trace_average(
+            self.sliced_data,
+            n=n,
+            axis=axis,
+            from_end=from_end,
+            use_filter=use_filter,
+            poly_fit=poly_fit,
+            filter_sigma=filter_sigma,
+            poly_fit_order=poly_fit_order
+        )
         self.vmin = np.min(self.sliced_data)
         self.vmax = np.max(self.sliced_data)
         self.update_histogramm()
