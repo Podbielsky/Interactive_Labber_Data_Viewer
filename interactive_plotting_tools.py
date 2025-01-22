@@ -168,6 +168,11 @@ class InteractiveArrayPlotter:
         self.loaded = False # rename to be more discriptiv
         self.calculated = False
 
+        #ROI attributes
+        self.roi_mode = False
+        self.roi_corners = []  # Store corners of the ROI as [(x1, y1), (x2, y2)]
+        self.current_roi_patch = None  # Current ROI rectangle
+
         # Create Menu Bar
         self.menubar = tk.Menu(self.root)
         self.root.config(menu=self.menubar)
@@ -204,7 +209,6 @@ class InteractiveArrayPlotter:
         self.menubar.add_cascade(label="Help", menu=self.help_menu)
 
         # Create a figure and axis for plotting
-
         if figure is None or ax is None:
             self.figure, self.ax = plt.subplots()
         else:
@@ -212,14 +216,17 @@ class InteractiveArrayPlotter:
 
         self.ax_vline = self.figure.add_axes([0.94, 0.12, 0.05, 0.75])  # Adjusted position and size
         self.ax_hline = self.figure.add_axes([0.12, 0.94, 0.62, 0.05])  # Adjusted position and size
+
         # Hide the additional axes initially
         self.ax_vline.set_visible(False)
         self.ax_hline.set_visible(False)
+
         # Create a new figure for the histogram
         self.histogram_fig, self.histogram_ax = plt.subplots(figsize=(3.5, 1.5))
         self.histogram_ax.set_yticklabels([])
         self.histogram_ax.set_xticklabels([])
         self.picked_line = None
+
         # Define interactive button options
         self.colormaps = ['viridis', 'plasma', 'inferno', 'magma', 'cividis', 'twilight', 'coolwarm', 'Spectral',
                           'gnuplot', 'NeonPiCy', 'BiMap']
@@ -233,7 +240,7 @@ class InteractiveArrayPlotter:
         self.crosshair_button.pack(side=tk.LEFT)
         self.interpol_button = tk.Button(self.toolbar, text='Interpolation', command=self.toggle_interpolation)
         self.interpol_button.pack(side=tk.LEFT)
-        self.roi_button = tk.Button(self.toolbar, text='ROI', command=self.toggle_crosshair)
+        self.roi_button = tk.Button(self.toolbar, text='ROI', command=self.toggle_roi)
         self.roi_button.pack(side=tk.LEFT)
         self.horiz_line = None
         self.vert_line = None
@@ -246,6 +253,7 @@ class InteractiveArrayPlotter:
         self.current_line = None
         self.click_cid = None
         self.move_cid = None
+
         # Pre calculate values for selection
         self.parameter_labels = [np.flip(self.data.name_axis)[i] for i in range(self.num_dimensions)]
         self.parameter_values = [list(range(np.flip(self.data.measure_dim)[i])) for i in range(len(np.flip(self.data.measure_dim)))]
@@ -474,6 +482,76 @@ class InteractiveArrayPlotter:
 
     def toggle_invert(self):
         self.invert_enabled = not self.invert_enabled
+
+    def toggle_roi(self):
+        if self.roi_mode:  # If ROI mode is active, deactivate it
+            if self.click_cid is not None:
+                self.canvas.mpl_disconnect(self.click_cid)
+                self.click_cid = None
+            if self.move_cid is not None:
+                self.canvas.mpl_disconnect(self.move_cid)
+                self.move_cid = None
+            self.roi_mode = False
+            self.roi_corners.clear()  # Clear ROI corners
+            if self.current_roi_patch:
+                self.current_roi_patch.remove()  # Remove the rectangle if it exists
+                self.current_roi_patch = None
+            self.ax.patches.clear()  # Clear any remaining patches
+            self.canvas.draw_idle()
+            return
+
+        # Activate ROI mode
+        self.roi_mode = True
+        self.roi_corners = []  # Initialize the list for ROI corners
+        self.current_roi_patch = None  # Reset the rectangle
+
+        # Function to handle mouse click
+        def on_click(event):
+            if not event.inaxes or event.button != 1:  # Only handle left-clicks inside the axes
+                return
+
+            if len(self.roi_corners) == 0:
+                # First click: Save the initial corner
+                self.roi_corners.append((event.xdata, event.ydata))
+            elif len(self.roi_corners) == 1:
+                # Second click: Save the final corner
+                self.roi_corners.append((event.xdata, event.ydata))
+                xmin, xmax = sorted([self.roi_corners[0][0], self.roi_corners[1][0]])
+                ymin, ymax = sorted([self.roi_corners[0][1], self.roi_corners[1][1]])
+                self.roi_corners = [(xmin, ymin), (xmax, ymax)]  # Store sorted coordinates
+                if self.current_roi_patch:
+                    self.current_roi_patch.set_alpha(.25)
+                print(f"ROI selected: {self.roi_corners}")
+            else:
+                # Third click: Reset the ROI
+                self.roi_corners.clear()
+                if self.current_roi_patch:
+                    self.current_roi_patch.remove()
+                    self.current_roi_patch = None
+                self.ax.patches.clear()
+                self.canvas.draw_idle()
+
+        # Function to handle mouse movement
+        def on_move(event):
+            if len(self.roi_corners) == 1 and event.inaxes:  # If the first point is selected
+                x1, y1 = self.roi_corners[0]
+                x2, y2 = event.xdata, event.ydata
+                if self.current_roi_patch:
+                    self.current_roi_patch.remove()  # Remove the previous patch
+                self.current_roi_patch = self.ax.add_patch(
+                    plt.Rectangle(
+                        (min(x1, x2), min(y1, y2)),
+                        abs(x2 - x1),
+                        abs(y2 - y1),
+                        color='red',
+                        alpha=0.5
+                    )
+                )
+                self.canvas.draw_idle()
+
+        # Connect the click and motion events
+        self.click_cid = self.canvas.mpl_connect('button_press_event', on_click)
+        self.move_cid = self.canvas.mpl_connect('motion_notify_event', on_move)
 
     def refresh_crosshair(self):
         self.toggle_crosshair()
