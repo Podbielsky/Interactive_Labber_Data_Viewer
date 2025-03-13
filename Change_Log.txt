@@ -38,7 +38,10 @@ change in v0.4.5
 - implemented creation of compatible .hdf5 files from numpy files containing 2D-arrays
 - implemented ROI selection
 - implemented BG correction via subtraction of first or last trace
-
-
-
+- implemented cutting of data to a certain range via ROI and a new function under Displayed data
+- added possibility toggle auto scaling
+- bug fix when using ROI and line drawing together
+- bug fix lines disapear after updating the plot
+- added possibility to modify already drawn lines
+- added selective polynomial bg fit
 

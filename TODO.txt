@@ -31,5 +31,6 @@ methods -> not urgent but would be nice to fix this
 
 - BUG (at least on Windows): Relation parameters do not work after it was once applied and another dataset is loaded in
 
-- BUG Installation does not work on certain Windows desktops (no clue why)
+- BUG Installation does not work on certain Windows desktops (no clue why, probably to not activating the venv and
+ using the default system PATH)
 

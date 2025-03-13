@@ -47,61 +47,115 @@ def image_down_sampling(imag, x, y, res_fac=(0.5, 0.5)):
     return xg, yg, result
 
 
-def two_d_fft_on_data(imag, x, y):
+def two_d_fft_on_data(imag, x, y, mode='Amplitude'):
 
-    '''
-    Applies a 2D Fast Fourier Transform (FFT) on a given image or 2D data.
+    """
+    Performs a 2D Fast Fourier Transform (FFT) operation on irregularly gridded data
+    and returns frequency grids along with the transformed data. The input data
+    is first interpolated onto a regular grid before applying the FFT. The output
+    can be amplitude, phase, or complex values based on the mode selected.
 
-    :param imag: 2D numpy array representing the image or data to transform.
-    :param x: 2D numpy array of x-coordinates for the original data.
-    :param y: 2D numpy array of y-coordinates for the original data.
-    :return: Tuple containing the FFT frequency grids for x and y, and the amplitude spectrum of the FFT.
-    '''
+    :param imag:
+        A 2D array representing the input data values to be transformed. It should
+        match with the dimensions of the x and y input coordinates.
+
+    :param x:
+        A 1D array representing the x-coordinates corresponding to the input data.
+        Coordinates may be unevenly spaced values.
+
+    :param y:
+        A 1D array representing the y-coordinates corresponding to the input data.
+        Coordinates may be unevenly spaced values.
+
+    :param mode:
+        A string specifying the desired output type of the FFT. Options include:
+        - 'Amplitude': Returns the amplitude of the FFT.
+        - 'Phase': Returns the phase of the FFT.
+        - 'Complex': Returns the full complex FFT result.
+        Defaults to 'Amplitude'.
+
+    :return:
+        A tuple containing three elements:
+        - ixg: The frequency grid corresponding to the x-direction after FFT.
+        - iyg: The frequency grid corresponding to the y-direction after FFT.
+        - fft_amp: The resulting 2D FFT data, calculated based on the selected mode.
+    """
     x_num = int(np.shape(imag)[1])
     y_num = int(np.shape(imag)[0])
     x_inter, dx = np.linspace(np.min(x), np.max(x), int(x_num), retstep=True)
     y_inter, dy = np.linspace(np.min(y), np.max(y), int(y_num), retstep=True)
     xg, yg = np.meshgrid(x_inter, y_inter)
     data_on_regular_grid = interpolate_2d_results(imag, x, y, (xg, yg))
-    fft_amp = fftshift(np.abs(fft2(data_on_regular_grid - np.mean(data_on_regular_grid), norm='ortho')))
+    if mode == 'Amplitude':
+        fft_amp = fftshift(np.abs(fft2(data_on_regular_grid - np.mean(data_on_regular_grid), norm='ortho')))
+    if mode == 'Phase':
+        fft_amp = fftshift(np.angle(fft2(data_on_regular_grid, norm='ortho')))
+    if mode == 'Complex':
+        fft_amp = fftshift(fft2(data_on_regular_grid, norm='ortho'))
     ixg, iyg = np.meshgrid(fftshift(fftfreq(int(x_num), dx)), fftshift(fftfreq(int(y_num), dy)))
     return ixg, iyg, fft_amp
 
 
-def evaluate_poly_background_2d(x, y, z, order_x, order_y):
-
+def evaluate_poly_background_2d(x, y, z, order_x, order_y,
+                                       x_range=None, y_range=None):
     '''
-    Evaluates and subtracts a polynomial background from 2D data.
+    Evaluates a polynomial background from a restricted region and applies it to the full dataset.
 
-    This function fits a polynomial of specified orders in x and y to the 2D data
-    and then subtracts this polynomial background.
+    This function fits a polynomial of specified orders to a defined region of data,
+    then applies that background model to the entire dataset.
 
-    :param x: 2D array of x coordinates.
-    :param y: 2D array of y coordinates.
-    :param z: 2D array of z values at each (x, y) point.
-    :param order_x: Integer specifying the order of the polynomial in the x-direction.
-    :param order_y: Integer specifying the order of the polynomial in the y-direction.
-    :return: 2D numpy array of the background-subtracted data.
+    :param x: 2D array of x coordinates
+    :param y: 2D array of y coordinates
+    :param z: 2D array of z values at each (x, y) point
+    :param order_x: Integer specifying the order of the polynomial in the x-direction
+    :param order_y: Integer specifying the order of the polynomial in the y-direction
+    :param x_range: Tuple (xmin, xmax) defining the x range for fitting, or None to use all data
+    :param y_range: Tuple (ymin, ymax) defining the y range for fitting, or None to use all data
+    :return: 2D numpy array of the calculated background for the full dataset
     '''
-
     assert x.shape == y.shape == z.shape, "x, y, and z must have the same shape"
 
-    # Flatten the x, y, and z arrays for the fitting
+    # Flatten the arrays
     x_flat = x.flatten()
     y_flat = y.flatten()
     z_flat = z.flatten()
 
-    # Generate the design matrix for the polynomial terms
-    A = np.zeros((x_flat.size, (order_x + 1) * (order_y + 1)))
+    # Create mask for the region of interest
+    mask = np.ones_like(x_flat, dtype=bool)
+
+    if x_range is not None:
+        x_min, x_max = x_range
+        mask &= (x_flat >= x_min) & (x_flat <= x_max)
+
+    if y_range is not None:
+        y_min, y_max = y_range
+        mask &= (y_flat >= y_min) & (y_flat <= y_max)
+
+    # Filter points to only those in the region of interest
+    x_roi = x_flat[mask]
+    y_roi = y_flat[mask]
+    z_roi = z_flat[mask]
+
+    if len(x_roi) == 0:
+        raise ValueError("No data points in the specified region!")
+
+    # Generate the design matrix for the polynomial terms (for ROI only)
+    A_roi = np.zeros((x_roi.size, (order_x + 1) * (order_y + 1)))
     for i in range(order_x + 1):
         for j in range(order_y + 1):
-            A[:, i * (order_y + 1) + j] = (x_flat**i) * (y_flat**j)
+            A_roi[:, i * (order_y + 1) + j] = (x_roi ** i) * (y_roi ** j)
 
-    # Solve the least squares problem
-    coeffs, _, _, _ = np.linalg.lstsq(A, z_flat, rcond=None)
+    # Solve the least squares problem for the ROI
+    coeffs, residuals, rank, s = np.linalg.lstsq(A_roi, z_roi, rcond=None)
 
-    # Evaluate the polynomial at the grid points
-    background_flat = A @ coeffs
+    # Now generate design matrix for the ENTIRE dataset
+    A_full = np.zeros((x_flat.size, (order_x + 1) * (order_y + 1)))
+    for i in range(order_x + 1):
+        for j in range(order_y + 1):
+            A_full[:, i * (order_y + 1) + j] = (x_flat ** i) * (y_flat ** j)
+
+    # Apply the coefficients to the entire dataset
+    background_flat = A_full @ coeffs
     background = background_flat.reshape(x.shape)
 
     return background
@@ -197,6 +251,37 @@ def subtract_trace_average(img, n, axis=0, from_end=False, use_filter=False, pol
 
 
 def gradient_5p_stencil(f, *varargs, axis=None, edge_order=1):
+    """
+    Computes the numerical gradient of a multidimensional array using the
+    5-point stencil method. This method calculates the gradient along the
+    specified axes of a given array using a finite difference approximation.
+    It supports both uniformly and non-uniformly spaced grids for input data.
+    The output is a numerical approximation of the gradient, with accuracy
+    dependent on the `edge_order` and spacing.
+
+    :param f: Input array for which the gradient will be computed.
+    :type f: numpy.ndarray
+    :param varargs: Variable parameter(s) for spacing between points along each
+        axis. Supports scalar values for uniform spacing, or 1-D arrays with
+        explicitly defined distances for non-uniform spacing.
+    :type varargs: list, tuple, or numpy.ndarray
+    :param axis: Axis or axes along which the gradient is computed. Defaults to
+        None, in which case the gradient is computed along all axes.
+    :type axis: int, tuple, or None
+    :param edge_order: Order of the finite difference approximation at the edges.
+        Acceptable values are 1 or 2, with higher values producing more accurate
+        derivative estimates near boundaries. Default is 1.
+    :type edge_order: int
+    :return: Numerical gradient computed along the specified axes. Returns a
+        single numpy.ndarray if the gradient is computed along a single axis, or
+        a tuple of numpy.ndarrays for multiple axes.
+    :rtype: numpy.ndarray or tuple of numpy.ndarray
+    :raises ValueError: If the shape of the input array along a specified axis is
+        less than 5, or if distances in `varargs` are improperly formatted,
+        mismatched with the input array dimensions, or are not supported.
+    :raises TypeError: If the number of elements in `varargs` does not match the
+        number of axes along which the gradient is calculated.
+    """
     #### 5-point stencil method for gradient calculation, base code adapted from numpy.gradient
     f = np.asanyarray(f)
     N = f.ndim  # number of dimensions
@@ -324,6 +409,32 @@ def gradient_5p_stencil(f, *varargs, axis=None, edge_order=1):
         return outvals[0]
     return tuple(outvals)
 
+
+def cut_data_range(x_grid, y_grid, z_data, x_range, y_range):
+    """
+    Filters and extracts a specific range of data from given 2D grids and associated data array.
+
+    This function takes two 2D grids (x and y) and a 2D data array, alongside specified ranges
+    for x and y dimensions. It computes masks to filter the given grids and data array to only
+    include elements within the specified range. The filtered subsets of the grids and data array
+    are returned.
+
+    :param x_grid: 2D numpy array representing the x-coordinate grid.
+    :param y_grid: 2D numpy array representing the y-coordinate grid.
+    :param z_data: 2D numpy array representing the data array associated with the grids.
+    :param x_range: Tuple containing the lower and upper bounds for the x-coordinate (inclusive).
+    :param y_range: Tuple containing the lower and upper bounds for the y-coordinate (inclusive).
+    :return: A tuple containing the filtered x-grid, y-grid, and data array.
+    :rtype: Tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]
+    """
+    x_mask = (x_grid[0, :] >= x_range[0]) & (x_grid[0, :] <= x_range[1])
+    y_mask = (y_grid[:, 0] >= y_range[0]) & (y_grid[:, 0] <= y_range[1])
+
+    x_grid_cut = x_grid[y_mask, :][:, x_mask]
+    y_grid_cut = y_grid[y_mask, :][:, x_mask]
+    z_data_cut = z_data[y_mask, :][:, x_mask]
+
+    return x_grid_cut, y_grid_cut, z_data_cut
 
 
 

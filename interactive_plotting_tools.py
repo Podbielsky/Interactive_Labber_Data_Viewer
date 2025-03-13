@@ -15,7 +15,7 @@ from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 from scipy.ndimage import gaussian_filter
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, evaluate_poly_background_2d,
                                           correct_median_diff, correct_mean_of_lines, gradient_5p_stencil,
-                                          subtract_trace_average)
+                                          subtract_trace_average, cut_data_range)
 from gamma_map import (get_t_rates, get_fourier, fft_correction_select, fft_correction_apply, get_cuts)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap
 neon_cmap = make_neon_cyclic_colormap()
@@ -78,7 +78,7 @@ class InteractiveSlicePlotter:
         self.ax.set_xlabel("X-axis")
         self.ax.set_ylabel("Y-axis")
 
-        self.canvas.draw()
+        self.canvas.draw_idle()
 
 
 class InteractiveHistogramPlotter:
@@ -190,6 +190,7 @@ class InteractiveArrayPlotter:
         self.data_menu = tk.Menu(self.menubar, tearoff=0)
         self.data_menu.add_command(label="Interpolation Settings", command=self.open_interpolation_window)
         self.data_menu.add_command(label="Gaussian Filter", command=self.open_gaussian_filter_window)
+        self.data_menu.add_command(label="Cut Data to ROI", command=self.open_roi_data_cut_window)
         self.data_menu.add_command(label="Background Subtraction", command=self.open_background_subtraction_window)
         self.data_menu.add_command(label="Rename and Scale Data and Axis", command=self.open_data_axis_transform)
         self.menubar.add_cascade(label="Displayed Data", menu=self.data_menu)
@@ -234,6 +235,7 @@ class InteractiveArrayPlotter:
         self.bg_methods = ['Polynomial', 'Median Difference', 'Mean of Lines', 'Relation Parameters',
                            'Subtract Trace Average']
         self.relation_parameter_entry_list = []
+        self.roi_cut_entry_list = []
         self.drawn_lines_list = []
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.root)
         self.toolbar = NavigationToolbar2Tk(self.canvas, root, pack_toolbar=False)
@@ -246,6 +248,7 @@ class InteractiveArrayPlotter:
         self.roi_button.pack(side=tk.LEFT)
         self.horiz_line = None
         self.vert_line = None
+        self.auto_scale_var = tk.BooleanVar(value=True)  # Default to True (auto-scaling
         self.crosshair_enabled = False
         self.interpolation_enabled = False
         self.invert_enabled = False
@@ -255,6 +258,8 @@ class InteractiveArrayPlotter:
         self.current_line = None
         self.click_cid = None
         self.move_cid = None
+        self.motion_cid = None
+        self.release_cid = None
 
         # Pre calculate values for selection
         self.parameter_labels = [np.flip(self.data.name_axis)[i] for i in range(self.num_dimensions)]
@@ -307,6 +312,13 @@ class InteractiveArrayPlotter:
         # Create a Frame for the "Plot" buttons
         self.button_frame = tk.Frame(self.root)
         self.button_frame.pack(side=tk.RIGHT, padx=5, pady=5)
+
+        self.auto_scale_check = tk.Checkbutton(
+            self.button_frame,
+            text="Auto-scale plot bounds",
+            variable=self.auto_scale_var
+        )
+        self.auto_scale_check.pack(side=tk.TOP, pady=2)
 
         # Create a "Reset Plot" button inside the button frame
         self.reset_plot_button = ttk.Button(self.button_frame, text="Plot", command=self.plot_data)
@@ -494,7 +506,6 @@ class InteractiveArrayPlotter:
                 self.canvas.mpl_disconnect(self.move_cid)
                 self.move_cid = None
             self.roi_mode = False
-            self.roi_corners.clear()  # Clear ROI corners
             if self.current_roi_patch:
                 self.current_roi_patch.remove()  # Remove the rectangle if it exists
                 self.current_roi_patch = None
@@ -561,8 +572,13 @@ class InteractiveArrayPlotter:
 
     def init_movable_lines(self):
         # Initial positions for vmin and vmax lines
-        vmin_initial = np.nanmin(self.sliced_data)
-        vmax_initial = np.nanmax(self.sliced_data)
+        if self.auto_scale_var.get() or self.vmin is None or self.vmax is None:
+            vmin_initial = np.nanmin(self.sliced_data)
+            vmax_initial = np.nanmax(self.sliced_data)
+        else:
+            vmin_initial = self.vmin
+            vmax_initial = self.vmax
+
         self.vline1 = None
         self.vline2 = None
         # Create vertical lines
@@ -729,6 +745,22 @@ class InteractiveArrayPlotter:
         # Initially update inputs for the default selected method
         self.update_bg_subtraction_inputs()
 
+    def open_roi_data_cut_window(self):
+        self.roi_data_cut_window = tk.Toplevel(self.root)
+        self.roi_data_cut_window.title("ROI Data")
+        self.roi_data_cut_window.geometry("300x250")
+        self.roi_cut_entry_list = []
+        labels = ["min. X:", "min.  Y:", "max. X:", "max. Y:"]
+        coordinates = np.array([self.roi_corners[0][0], self.roi_corners[0][1], self.roi_corners[1][0], self.roi_corners[1][1]])
+        for i, label in enumerate(labels):
+            tk.Label(self.roi_data_cut_window, text=label).grid(row=i, column=0, padx=5, pady=5)
+            entry = tk.Entry(self.roi_data_cut_window)
+            entry.insert(0, str(coordinates[i]))
+            entry.grid(row=i, column=1, padx=5, pady=5)
+            self.roi_cut_entry_list.append(entry)
+        submit_button = tk.Button(self.roi_data_cut_window, text="Apply", command=self.apply_roi_data_cut)
+        submit_button.grid(row=4, column=0, columnspan=2, padx=5, pady=5)
+
     def open_draw_lines_window(self):
         self.draw_lines_window = tk.Toplevel(self.root)
         self.draw_lines_window.title("Draw Lines")
@@ -760,6 +792,7 @@ class InteractiveArrayPlotter:
         activate_button.pack(side=tk.LEFT)
         deactivate_button.pack(side=tk.LEFT)
         reset_lines_button.pack(side=tk.LEFT)
+        self.setup_line_editing()
 
     def update_bg_subtraction_inputs(self, event=None):
         # Clear previous inputs
@@ -770,6 +803,8 @@ class InteractiveArrayPlotter:
 
         # Inputs for Polynomial method
         if selected_method == 'Polynomial':
+
+            self.use_roi_in_bg_subtraction = tk.BooleanVar(value=False)
             tk.Label(self.method_input_frame, text="X Polynomial Order:").pack()
             self.poly_order_x = tk.Entry(self.method_input_frame)
             self.poly_order_x.pack()
@@ -779,6 +814,13 @@ class InteractiveArrayPlotter:
             self.poly_order_y = tk.Entry(self.method_input_frame)
             self.poly_order_y.pack()
             self.poly_order_y.insert(0, "1")  # Default value
+
+            self.use_roi_in_bg_check = tk.Checkbutton(
+                self.method_input_frame,
+                text="Use ROI",
+                variable=self.use_roi_in_bg_subtraction
+            )
+            self.use_roi_in_bg_check.pack(side=tk.BOTTOM, pady=2)
 
         elif selected_method == 'Relation Parameters':
             # Add input fields for the Relation Parameters method
@@ -915,7 +957,7 @@ class InteractiveArrayPlotter:
 
         # Create a canvas to embed the figure into the Tkinter window
         self.fft_canvas = FigureCanvasTkAgg(self.fft_fig, master=self.fft_plot_window)
-        self.fft_canvas.draw()
+        self.fft_canvas.draw_idle()
 
         self.fft_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
         self.toolbar = NavigationToolbar2Tk(self.fft_canvas, self.fft_plot_window)
@@ -950,8 +992,9 @@ class InteractiveArrayPlotter:
 
         self.xlim = [np.min(self.X), np.max(self.X)]
         self.ylim = [np.min(self.Y), np.max(self.Y)]
-        self.vmin = np.min(self.sliced_data)
-        self.vmax = np.max(self.sliced_data)
+        if self.auto_scale_var.get():
+            self.vmin = np.min(self.sliced_data)
+            self.vmax = np.max(self.sliced_data)
 
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
@@ -975,24 +1018,37 @@ class InteractiveArrayPlotter:
             self.update_pcolormesh(self.vmin, self.vmax)
 
     def apply_poly_bg(self):
-        bg = evaluate_poly_background_2d(self.X, self.Y, self.sliced_data, int(self.poly_order_x.get()), int(self.poly_order_y.get()))
+        if self.use_roi_in_bg_subtraction.get() and self.roi_mode:
+            xmin, xmax = sorted([self.roi_corners[0][0], self.roi_corners[1][0]])
+            ymin, ymax = sorted([self.roi_corners[0][1], self.roi_corners[1][1]])
+            bg = evaluate_poly_background_2d(self.X, self.Y, self.sliced_data, int(self.poly_order_x.get()),
+                                             int(self.poly_order_y.get()), (xmin, xmax), (ymin, ymax))
+        else:
+            bg = evaluate_poly_background_2d(self.X, self.Y, self.sliced_data, int(self.poly_order_x.get()),
+                                             int(self.poly_order_y.get()))
+
         self.sliced_data = self.sliced_data - bg
-        self.vmin = np.min(self.sliced_data)
-        self.vmax = np.max(self.sliced_data)
+
+        if self.auto_scale_var.get():
+            self.vmin = np.min(self.sliced_data)
+            self.vmax = np.max(self.sliced_data)
+
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
     def apply_median_difference(self):
         self.sliced_data = correct_median_diff(self.sliced_data)
-        self.vmin = np.min(self.sliced_data)
-        self.vmax = np.max(self.sliced_data)
+        if self.auto_scale_var.get():
+            self.vmin = np.min(self.sliced_data)
+            self.vmax = np.max(self.sliced_data)
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
     def apply_mean_of_lines(self):
         self.sliced_data = correct_mean_of_lines(self.sliced_data)
-        self.vmin = np.min(self.sliced_data)
-        self.vmax = np.max(self.sliced_data)
+        if self.auto_scale_var.get():
+            self.vmin = np.min(self.sliced_data)
+            self.vmax = np.max(self.sliced_data)
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
@@ -1002,8 +1058,11 @@ class InteractiveArrayPlotter:
                             np.float64(self.relation_parameter_entry_list[2].get()) *
                             self.Y ** np.float64(self.relation_parameter_entry_list[3].get())
                             + np.float64(self.relation_parameter_entry_list[4].get()))
-        self.vmin = np.min(self.sliced_data)
-        self.vmax = np.max(self.sliced_data)
+
+        if self.auto_scale_var.get():
+            self.vmin = np.min(self.sliced_data)
+            self.vmax = np.max(self.sliced_data)
+
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
@@ -1028,8 +1087,9 @@ class InteractiveArrayPlotter:
             filter_sigma=filter_sigma,
             poly_fit_order=poly_fit_order
         )
-        self.vmin = np.min(self.sliced_data)
-        self.vmax = np.max(self.sliced_data)
+        if self.auto_scale_var.get():
+            self.vmin = np.min(self.sliced_data)
+            self.vmax = np.max(self.sliced_data)
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
@@ -1043,8 +1103,9 @@ class InteractiveArrayPlotter:
         dy = np.mean((np.diff(self.Y, axis=0)).flatten())
         # Calculate gradient
         self.sliced_data = np.gradient(self.sliced_data, dx, dy)[self.axis_selection.index(self.derivative_combobox.get())]
-        self.vmin = np.min(self.sliced_data)
-        self.vmax = np.max(self.sliced_data)
+        if self.auto_scale_var.get():
+            self.vmin = np.min(self.sliced_data)
+            self.vmax = np.max(self.sliced_data)
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
@@ -1055,8 +1116,9 @@ class InteractiveArrayPlotter:
         # Calculate gradient
         self.sliced_data = np.sqrt(np.gradient(self.sliced_data, dx, dy)[0] ** 2
                             + np.gradient(self.sliced_data, dx, dy)[1] ** 2)
-        self.vmin = np.min(self.sliced_data)
-        self.vmax = np.max(self.sliced_data)
+        if self.auto_scale_var.get():
+            self.vmin = np.min(self.sliced_data)
+            self.vmax = np.max(self.sliced_data)
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
@@ -1072,6 +1134,46 @@ class InteractiveArrayPlotter:
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
+    def apply_roi_data_cut(self):
+        try:
+            # Convert entry values to floats
+            x_range = (float(self.roi_cut_entry_list[0].get()), float(self.roi_cut_entry_list[2].get()))
+            y_range = (float(self.roi_cut_entry_list[1].get()), float(self.roi_cut_entry_list[3].get()))
+
+            # Validate ranges
+            if x_range[0] >= x_range[1] or y_range[0] >= y_range[1]:
+                messagebox.showerror("Invalid Range", "Min values must be less than max values")
+                return
+
+            # Store original data for potential undo
+            self.original_data = (self.X.copy(), self.Y.copy(), self.sliced_data.copy())
+
+            # Apply the cut
+            result = cut_data_range(self.X, self.Y, self.sliced_data, x_range, y_range)
+            if result is not None:
+                self.X, self.Y, self.sliced_data = result
+
+                # Calculate new min/max if data exists
+                if len(self.sliced_data) > 0:
+
+                    if self.auto_scale_var.get():
+                        self.vmin = np.min(self.sliced_data)
+                        self.vmax = np.max(self.sliced_data)
+
+                    self.xlim = (np.min(self.X), np.max(self.X))
+                    self.ylim = (np.min(self.Y), np.max(self.Y))
+                    self.update_plot()
+                    self.roi_data_cut_window.destroy()  # Close window on success
+                else:
+                    messagebox.showwarning("Warning", "No data points in the selected range")
+            else:
+                messagebox.showerror("Error", "Failed to apply ROI cut")
+
+        except ValueError:
+            messagebox.showerror("Invalid Input", "Please enter numeric values")
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred: {str(e)}")
+
     def apply_fft_trace_correction(self):
         #### Modified by Nico R. ####
         self.cuts = get_cuts(self.fft_ax)
@@ -1084,6 +1186,9 @@ class InteractiveArrayPlotter:
         self.fft_plot_window.update()
 
     def activate_line_drawing(self):
+        if hasattr(self, 'roi_mode') and self.roi_mode:
+            self.toggle_roi()  # Turn off ROI before enabling line drawing
+
         self.click_cid = self.canvas.mpl_connect('button_press_event', self.on_canvas_click)
         self.move_cid = self.canvas.mpl_connect('motion_notify_event', self.on_canvas_move)
 
@@ -1099,11 +1204,295 @@ class InteractiveArrayPlotter:
         self.drawn_lines_list = []
         self.update_lines_listbox()
 
+    def setup_line_editing(self):
+        """Set up the line editing functionality with right-click context menu"""
+        # Initialize editing state variables
+        self.editing_line = False
+        self.editing_line_index = None
+        self.editing_point = None  # 0 for start point, 1 for end point
+        self.edit_markers = []
+
+        # Create a right-click context menu for the lines listbox
+        self.lines_context_menu = tk.Menu(self.lines_listbox, tearoff=0)
+        self.lines_context_menu.add_command(label="Edit Line", command=self.start_line_editing)
+        self.lines_context_menu.add_command(label="Delete Line", command=self.delete_selected_line)
+
+        # Bind right-click event to show context menu
+        self.lines_listbox.bind("<Button-3>", self.show_lines_context_menu)
+
+        # Also bind double-click as a quick way to edit a line
+        self.lines_listbox.bind("<Double-Button-1>", lambda event: self.start_line_editing())
+
+    def show_lines_context_menu(self, event):
+        """Show the context menu on right-click in the lines listbox"""
+        # Get the line index at the current mouse position
+        try:
+            index = self.lines_listbox.nearest(event.y)
+            # Only show menu if we clicked on an actual line
+            if index < len(self.drawn_lines_list):
+                # Select the line first
+                self.lines_listbox.selection_clear(0, tk.END)
+                self.lines_listbox.selection_set(index)
+                self.lines_listbox.activate(index)
+                # Show the context menu
+                self.lines_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            # Make sure to release the menu
+            self.lines_context_menu.grab_release()
+
+    def start_line_editing(self):
+        """Start editing the selected line"""
+        # Get selected line index from listbox
+        selected_indices = self.lines_listbox.curselection()
+        if not selected_indices:
+            messagebox.showinfo("No Selection", "Please select a line to edit.")
+            return
+
+        selected_index = selected_indices[0]
+        if selected_index >= len(self.drawn_lines_list):
+            messagebox.showinfo("Invalid Selection", "The selected line no longer exists.")
+            return
+
+        # Enter editing mode
+        self.editing_line = True
+        self.editing_line_index = selected_index
+
+        # Disconnect any existing drawing events temporarily
+        self.disconnect_drawing_events()
+
+        # Add markers at the endpoints of the selected line
+        self.show_endpoint_markers(selected_index)
+
+        # Set up click handler for editing
+        self.edit_click_cid = self.canvas.mpl_connect('button_press_event', self.on_edit_click)
+
+        # Update status
+        if hasattr(self, 'status_var'):
+            self.status_var.set(
+                "Click and drag a line endpoint (green/blue marker). Right-click or press Esc to finish.")
+
+        # Bind Escape key to finish editing
+        self.canvas.get_tk_widget().bind("<Escape>", lambda e: self.finish_line_editing())
+
+        # Also bind right-click to finish editing
+        self.edit_right_click_cid = self.canvas.mpl_connect('button_press_event',
+                                                            lambda
+                                                                event: self.finish_line_editing() if event.button == 3 else None)
+
+    def disconnect_drawing_events(self):
+        """Disconnect any active drawing event handlers"""
+        if hasattr(self, 'click_cid') and self.click_cid is not None:
+            self.canvas.mpl_disconnect(self.click_cid)
+            self.click_cid = None
+
+        if hasattr(self, 'move_cid') and self.move_cid is not None:
+            self.canvas.mpl_disconnect(self.move_cid)
+            self.move_cid = None
+
+        # Cancel any in-progress line drawing
+        if hasattr(self, 'drawing_line') and self.drawing_line:
+            self.drawing_line = False
+            if hasattr(self, 'current_line_artist') and self.current_line_artist is not None:
+                self.current_line_artist.remove()
+                self.current_line_artist = None
+            self.current_line = None
+            self.canvas.draw_idle()
+
+    def show_endpoint_markers(self, line_index):
+        """Display markers at the endpoints of the selected line"""
+        # Clear any existing markers
+        self.clear_edit_markers()
+
+        # Get the line coordinates
+        line = self.drawn_lines_list[line_index]
+        start_point, end_point = line
+
+        # Create markers for start and end points with different colors
+        start_marker = self.ax.plot([start_point[0]], [start_point[1]], 'go',
+                                    markersize=10, alpha=0.7, zorder=10)[0]
+        end_marker = self.ax.plot([end_point[0]], [end_point[1]], 'bo',
+                                  markersize=10, alpha=0.7, zorder=10)[0]
+
+        # Store the markers
+        self.edit_markers = [start_marker, end_marker]
+
+        # Draw the updated plot
+        self.canvas.draw_idle()
+
+    def clear_edit_markers(self):
+        """Remove all endpoint markers"""
+        for marker in self.edit_markers:
+            if marker in self.ax.lines:
+                marker.remove()
+        self.edit_markers = []
+        self.canvas.draw_idle()
+
+    def on_edit_click(self, event):
+        """Handle clicks when in line editing mode"""
+        if not event.inaxes or event.inaxes != self.ax or event.button != 1:  # Only handle left clicks
+            return
+
+        if not self.editing_line:
+            return
+
+        # Get coordinates of the selected line
+        line = self.drawn_lines_list[self.editing_line_index]
+        start_point, end_point = line
+
+        # Calculate distances to both endpoints
+        dist_to_start = np.sqrt((event.xdata - start_point[0]) ** 2 +
+                                (event.ydata - start_point[1]) ** 2)
+        dist_to_end = np.sqrt((event.xdata - end_point[0]) ** 2 +
+                              (event.ydata - end_point[1]) ** 2)
+
+        # Define a threshold for selecting a point (in data units)
+        threshold = (self.ax.get_xlim()[1] - self.ax.get_xlim()[0]) * 0.05
+
+        # Check if we clicked near an endpoint
+        if dist_to_start < threshold or dist_to_end < threshold:
+            # Determine which point is closer
+            if dist_to_start < dist_to_end:
+                self.editing_point = 0  # Start point
+            else:
+                self.editing_point = 1  # End point
+
+            # Connect the motion event for dragging
+            self.edit_motion_cid = self.canvas.mpl_connect(
+                'motion_notify_event', self.on_edit_motion)
+            # Connect the release event
+            self.edit_release_cid = self.canvas.mpl_connect(
+                'button_release_event', self.on_edit_release)
+
+    def on_edit_motion(self, event):
+        """Handle mouse motion during endpoint dragging"""
+        if not event.inaxes or not self.editing_line or self.editing_point is None:
+            return
+
+        # Get the current line
+        line = self.drawn_lines_list[self.editing_line_index]
+        start_point, end_point = line
+
+        # Update the appropriate endpoint
+        if self.editing_point == 0:  # Start point
+            self.drawn_lines_list[self.editing_line_index] = [(event.xdata, event.ydata), end_point]
+            self.edit_markers[0].set_data([event.xdata], [event.ydata])
+        else:  # End point
+            self.drawn_lines_list[self.editing_line_index] = [start_point, (event.xdata, event.ydata)]
+            self.edit_markers[1].set_data([event.xdata], [event.ydata])
+
+        # Update the line drawing
+        self.redraw_saved_lines()
+        self.canvas.draw_idle()
+
+    def on_edit_release(self, event):
+        """Handle mouse release after dragging endpoint"""
+        if not self.editing_line or self.editing_point is None:
+            return
+
+        # Disconnect motion and release events
+        if hasattr(self, 'edit_motion_cid'):
+            self.canvas.mpl_disconnect(self.edit_motion_cid)
+            self.edit_motion_cid = None
+
+        if hasattr(self, 'edit_release_cid'):
+            self.canvas.mpl_disconnect(self.edit_release_cid)
+            self.edit_release_cid = None
+
+        # Reset editing point
+        self.editing_point = None
+
+        # Update the listbox with new coordinates
+        self.update_lines_listbox()
+
+    def finish_line_editing(self):
+        """Exit line editing mode"""
+        if not self.editing_line:
+            return
+
+        self.editing_line = False
+        self.editing_line_index = None
+
+        # Disconnect edit events
+        if hasattr(self, 'edit_click_cid'):
+            self.canvas.mpl_disconnect(self.edit_click_cid)
+            self.edit_click_cid = None
+
+        if hasattr(self, 'edit_right_click_cid'):
+            self.canvas.mpl_disconnect(self.edit_right_click_cid)
+            self.edit_right_click_cid = None
+
+        # Clear markers
+        self.clear_edit_markers()
+
+        # Unbind escape key
+        self.canvas.get_tk_widget().unbind("<Escape>")
+
+        # Update status
+        if hasattr(self, 'status_var'):
+            self.status_var.set("Line editing completed.")
+
+        # Redraw to remove any highlighting
+        self.redraw_saved_lines()
+        self.canvas.draw_idle()
+
+    def delete_selected_line(self):
+        """Delete the selected line"""
+        # Get selected line index from listbox
+        selected_indices = self.lines_listbox.curselection()
+        if not selected_indices:
+            messagebox.showinfo("No Selection", "Please select a line to delete.")
+            return
+
+        selected_index = selected_indices[0]
+        if selected_index >= len(self.drawn_lines_list):
+            messagebox.showinfo("Invalid Selection", "The selected line no longer exists.")
+            return
+
+        # Remove the line from our list
+        self.drawn_lines_list.pop(selected_index)
+
+        # Update the listbox and redraw
+        self.update_lines_listbox()
+        self.redraw_saved_lines()
+        self.canvas.draw_idle()
+
+        # Update status
+        if hasattr(self, 'status_var'):
+            self.status_var.set(f"Line {selected_index + 1} deleted.")
+
+    # Update the redraw_saved_lines function to handle highlighting the edited line
+    def redraw_saved_lines(self):
+        """Redraw all saved lines after clearing the plot."""
+        # Remove existing line artists from the plot
+        if hasattr(self, 'line_artists'):
+            for line_artist in self.line_artists:
+                if line_artist in self.ax.lines:
+                    line_artist.remove()
+
+        # Create a new list for line artists
+        self.line_artists = []
+
+        # Redraw each line from the drawn_lines_list
+        for i, line in enumerate(self.drawn_lines_list):
+            start_point, end_point = line
+            x_values = [start_point[0], end_point[0]]
+            y_values = [start_point[1], end_point[1]]
+
+            # Highlight the selected line if in editing mode
+            if self.editing_line and i == self.editing_line_index:
+                line_artist, = self.ax.plot(x_values, y_values, color='purple',
+                                            linewidth=2, zorder=6)
+            else:
+                line_artist, = self.ax.plot(x_values, y_values, color='red',
+                                            linewidth=1, zorder=5)
+
+            self.line_artists.append(line_artist)
+
     def update_lines_listbox(self):
         self.lines_listbox.delete(0, tk.END)  # Clear the current contents of the listbox
         for i, line in enumerate(self.drawn_lines_list, start=1):
             # Assuming each line is a tuple of start and end points like ((x1, y1), (x2, y2))
-            start_point, end_point = np.round(line, 6)
+            start_point, end_point = np.round(line, 4)
             line_str = f"Line {i}: Start {start_point} End {end_point}"
             self.lines_listbox.insert(tk.END, line_str)
 
@@ -1155,6 +1544,10 @@ class InteractiveArrayPlotter:
         self.ax.set_ylim(self.ylim)
         self.ax_vline.set_ylim(self.ax.get_ylim())
         self.ax_hline.set_xlim(self.ax.get_xlim())
+
+        # Redraw all the lines in drawn_lines_list
+        self.redraw_saved_lines()
+
         if self.crosshair_enabled:
             self.refresh_crosshair()
         self.canvas.draw_idle()
@@ -1274,7 +1667,7 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
         self.ax_hline.set_position([0.12, 0.94, 0.62, 0.05])  # Adjusted position and size
         # Redraw the canvas with the new figure
         self.canvas.figure = self.figure
-        self.canvas.draw()
+        self.canvas.draw_idle()
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         # Redraw the toolbar with the new canvas
