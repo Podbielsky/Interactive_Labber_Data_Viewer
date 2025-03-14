@@ -1,7 +1,7 @@
 import numpy as np
 from scipy import interpolate
 from scipy.ndimage import gaussian_filter1d, gaussian_filter
-from scipy.spatial import distance
+from scipy.spatial import KDTree
 from scipy.signal import find_peaks
 from scipy.optimize import curve_fit
 from scipy.fft import fft2, fftfreq, fftshift
@@ -64,10 +64,9 @@ def extract_linecut(x, y, z, start_point, end_point):
     if len(x) > 1:
         points = np.column_stack((x, y))
         # Calculate distances between each point and its nearest neighbor
-        dist_matrix = distance.cdist(points, points)
-        np.fill_diagonal(dist_matrix, np.inf)  # Exclude self-distances
-        min_distances = np.min(dist_matrix, axis=1)
-        avg_grid_spacing = np.mean(min_distances)
+        tree = KDTree(points)
+        distances, _ = tree.query(points, k=2)  # Find self and nearest neighbor
+        avg_grid_spacing = np.mean(distances[:, 1])  # placeholder
     else:
         avg_grid_spacing = 1.0
 

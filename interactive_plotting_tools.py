@@ -1248,8 +1248,13 @@ class InteractiveArrayPlotter:
 
         self.editing_line_index = selected_index
 
-        if not hasattr(self, 'linecut_plotter'):
+        if (not hasattr(self, 'linecut_plotter') or
+                not hasattr(self.linecut_plotter, 'root')):
+            # Create a new plotter
             self.linecut_plotter = UtilityLinePlotter(self.root)
+
+            # Set up protocol for window close using the root window
+            self.linecut_plotter.root.protocol("WM_DELETE_WINDOW", self.on_linecut_window_close)
 
         line = self.drawn_lines_list[self.editing_line_index]
         start_point, end_point = line
@@ -1453,6 +1458,14 @@ class InteractiveArrayPlotter:
 
         # Update the listbox with new coordinates
         self.update_lines_listbox()
+
+    def on_linecut_window_close(self):
+        """Handle the closing of the linecut plotter window."""
+        if hasattr(self, 'linecut_plotter') and hasattr(self.linecut_plotter, 'root'):
+            # Explicitly destroy the window
+            self.linecut_plotter.root.destroy()
+            # Remove our reference to the plotter
+            delattr(self, 'linecut_plotter')
 
     def finish_line_editing(self):
         """Exit line editing mode"""
@@ -1963,6 +1976,13 @@ class UtilityLinePlotter:
         self.selected_line_idx = None
         self.update_plot()
 
+    def is_alive(self):
+        """Check if the toplevel window still exists and is not destroyed."""
+        try:
+            return self.toplevel.winfo_exists()
+        except:
+            return False
+
     def update_plot(self):
         """Update the plot with current data and settings."""
         self.ax.clear()
@@ -1986,4 +2006,5 @@ class UtilityLinePlotter:
 
         # Draw the canvas
         self.canvas.draw()
+
 
