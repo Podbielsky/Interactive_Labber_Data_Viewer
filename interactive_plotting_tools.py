@@ -15,7 +15,7 @@ from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 from scipy.ndimage import gaussian_filter
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, evaluate_poly_background_2d,
                                           correct_median_diff, correct_mean_of_lines, gradient_5p_stencil,
-                                          subtract_trace_average, cut_data_range)
+                                          subtract_trace_average, cut_data_range, extract_linecut)
 from gamma_map import (get_t_rates, get_fourier, fft_correction_select, fft_correction_apply, get_cuts)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap
 neon_cmap = make_neon_cyclic_colormap()
@@ -463,6 +463,16 @@ class InteractiveArrayPlotter:
         print(f'Plotting time: {tock - tick} s')
 
     def toggle_crosshair(self):
+        """
+        Enables or disables the crosshair functionality on a matplotlib plot. When enabled, it
+        initializes or updates horizontal and vertical crosshair lines and sets up event handlers
+        to track cursor movement. When disabled, it removes the crosshair lines and disconnects
+        associated event handling.
+
+        :raises NotImplementedError: If any required handler or attribute initialization is
+                                      missing (implicit conditions may apply).
+
+        """
         self.crosshair_enabled = not self.crosshair_enabled
 
         # Initialize or update crosshair lines
@@ -1215,6 +1225,7 @@ class InteractiveArrayPlotter:
         # Create a right-click context menu for the lines listbox
         self.lines_context_menu = tk.Menu(self.lines_listbox, tearoff=0)
         self.lines_context_menu.add_command(label="Edit Line", command=self.start_line_editing)
+        self.lines_context_menu.add_command(label="Extract Line", command=self.extract_and_plot_linecut)
         self.lines_context_menu.add_command(label="Delete Line", command=self.delete_selected_line)
 
         # Bind right-click event to show context menu
@@ -1222,6 +1233,45 @@ class InteractiveArrayPlotter:
 
         # Also bind double-click as a quick way to edit a line
         self.lines_listbox.bind("<Double-Button-1>", lambda event: self.start_line_editing())
+
+    def extract_and_plot_linecut(self):
+        """Extract line cut data and display in a UtilityLinePlotter."""
+        selected_indices = self.lines_listbox.curselection()
+        if not selected_indices:
+            messagebox.showinfo("No Selection", "Please select a line to edit.")
+            return
+
+        selected_index = selected_indices[0]
+        if selected_index >= len(self.drawn_lines_list):
+            messagebox.showinfo("Invalid Selection", "The selected line no longer exists.")
+            return
+
+        self.editing_line_index = selected_index
+
+        if not hasattr(self, 'linecut_plotter'):
+            self.linecut_plotter = UtilityLinePlotter(self.root)
+
+        line = self.drawn_lines_list[self.editing_line_index]
+        start_point, end_point = line
+
+        # Get the current data
+
+
+        # Extract the line cut using the extract_linecut function
+        linecut_result = extract_linecut(self.X, self.Y, self.sliced_data, start_point, end_point)
+
+        # Create distance array (x-axis) for the line cut plot
+        x0, y0 = start_point
+        x1, y1 = end_point
+        total_distance = np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2)
+        num_points = len(linecut_result)
+        distance = np.linspace(0, total_distance, num_points)
+
+        # Generate a label for the line cut
+        line_label = f"Line {len(self.linecut_plotter.data) + 1} )"
+
+        # Add the line cut to the plotter
+        self.linecut_plotter.add_linecut(distance, linecut_result, label=line_label)
 
     def show_lines_context_menu(self, event):
         """Show the context menu on right-click in the lines listbox"""
@@ -1772,4 +1822,168 @@ class InteractiveTimeTraceMapPlotter(InteractiveArrayPlotter):
     def __init__(self, root, hdf5data):
 
         super().__init__(root, hdf5data)
+
+
+class UtilityLinePlotter:
+    def __init__(self, master=None):
+        """
+        Initialize a utility plotter for line cuts.
+
+        Parameters:
+        -----------
+        master : Tk window
+            Parent window, if None a new Tk window will be created
+        """
+        if master is None:
+            self.root = tk.Tk()
+            self.root.title("Line Cut Plotter")
+            self.root.geometry("800x600")
+        else:
+            self.root = tk.Toplevel(master)
+            self.root.title("Line Cut Plotter")
+            self.root.geometry("800x600")
+
+        # Store line cut data as list of tuples (x, y, label)
+        self.data = []
+        self.selected_line_idx = None
+
+        # Create the figure and axis for plotting
+        self.fig = plt.Figure(figsize=(6, 5), dpi=100)
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_xlabel('Distance')
+        self.ax.set_ylabel('Value')
+
+        # Create widgets
+        self.create_widgets()
+        self.update_plot()
+
+    def create_widgets(self):
+        """Create all GUI widgets for the plotter."""
+        # Create main frame for layout
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Create frame for plot
+        plot_frame = ttk.Frame(main_frame)
+        plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Create canvas for matplotlib figure
+        self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
+        self.canvas_widget = self.canvas.get_tk_widget()
+        self.canvas_widget.pack(fill=tk.BOTH, expand=True)
+
+        # Add toolbar
+        toolbar_frame = ttk.Frame(plot_frame)
+        toolbar_frame.pack(fill=tk.X)
+        toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
+        toolbar.update()
+
+        # Create sidebar frame
+        sidebar_frame = ttk.Frame(main_frame, width=200)
+        sidebar_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5)
+
+        # Add line selector frame
+        line_select_frame = ttk.LabelFrame(sidebar_frame, text="Line Cuts")
+        line_select_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Create listbox for line selection
+        self.line_listbox = tk.Listbox(line_select_frame)
+        self.line_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.line_listbox.bind('<<ListboxSelect>>', self.on_line_select)
+
+        # Add control buttons
+        btn_frame = ttk.Frame(sidebar_frame)
+        btn_frame.pack(fill=tk.X, pady=5)
+
+        self.remove_btn = ttk.Button(btn_frame, text="Remove", command=self.remove_line)
+        self.remove_btn.pack(side=tk.LEFT, padx=2)
+
+        self.clear_btn = ttk.Button(btn_frame, text="Clear All", command=self.clear_lines)
+        self.clear_btn.pack(side=tk.LEFT, padx=2)
+
+        # Add options frame
+        options_frame = ttk.LabelFrame(sidebar_frame, text="Options")
+        options_frame.pack(fill=tk.X, pady=5)
+
+        # Legend toggle
+        self.show_legend_var = tk.BooleanVar(value=True)
+        self.legend_check = ttk.Checkbutton(options_frame, text="Show Legend",
+                                            variable=self.show_legend_var,
+                                            command=self.update_plot)
+        self.legend_check.pack(anchor=tk.W, padx=5, pady=2)
+
+    def add_linecut(self, x_data, y_data, label=None):
+        """
+        Add a new line cut to the plot.
+
+        Parameters:
+        -----------
+        x_data : array-like
+            X values (typically distance along linecut)
+        y_data : array-like
+            Y values (data values along linecut)
+        label : str, optional
+            Label for the line cut
+        """
+        if label is None:
+            label = f"Line {len(self.data) + 1}"
+
+        self.data.append((x_data, y_data, label))
+        self.line_listbox.insert(tk.END, label)
+        self.selected_line_idx = len(self.data) - 1
+        self.line_listbox.selection_clear(0, tk.END)
+        self.line_listbox.selection_set(self.selected_line_idx)
+        self.update_plot()
+
+    def on_line_select(self, event):
+        """Handle selection of a line from the listbox."""
+        selection = self.line_listbox.curselection()
+        if selection:
+            self.selected_line_idx = selection[0]
+            self.update_plot()
+
+    def remove_line(self):
+        """Remove the selected line cut."""
+        if self.selected_line_idx is not None and 0 <= self.selected_line_idx < len(self.data):
+            self.data.pop(self.selected_line_idx)
+            self.line_listbox.delete(self.selected_line_idx)
+
+            if len(self.data) > 0:
+                self.selected_line_idx = min(self.selected_line_idx, len(self.data) - 1)
+                self.line_listbox.selection_set(self.selected_line_idx)
+            else:
+                self.selected_line_idx = None
+
+            self.update_plot()
+
+    def clear_lines(self):
+        """Clear all line cuts from the plot."""
+        self.data = []
+        self.line_listbox.delete(0, tk.END)
+        self.selected_line_idx = None
+        self.update_plot()
+
+    def update_plot(self):
+        """Update the plot with current data and settings."""
+        self.ax.clear()
+
+        colors = plt.cm.tab10.colors
+
+        for i, (x, y, label) in enumerate(self.data):
+            color = colors[i % len(colors)]
+            if i == self.selected_line_idx:
+                # Highlight selected line
+                self.ax.plot(x, y, label=label, color=color, linewidth=2.5)
+            else:
+                self.ax.plot(x, y, label=label, color=color, linewidth=1.5)
+
+        # Add labels and legend if there is data
+        if self.data:
+            self.ax.set_xlabel('Distance')
+            self.ax.set_ylabel('Value')
+            if self.show_legend_var.get():
+                self.ax.legend()
+
+        # Draw the canvas
+        self.canvas.draw()
 

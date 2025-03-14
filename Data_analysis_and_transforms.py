@@ -1,6 +1,7 @@
 import numpy as np
 from scipy import interpolate
 from scipy.ndimage import gaussian_filter1d, gaussian_filter
+from scipy.spatial import distance
 from scipy.signal import find_peaks
 from scipy.optimize import curve_fit
 from scipy.fft import fft2, fftfreq, fftshift
@@ -23,6 +24,70 @@ def interpolate_2d_results(imag, x, y, grid):
     cor = np.array([x.flatten(), y.flatten()]).T
     result = np.array(interpolate.griddata(cor, imag, grid, method='linear', fill_value=0))
     return result
+
+
+def extract_linecut(x, y, z, start_point, end_point):
+    """
+    Extract values from an irregular 2D dataset along a line between two points.
+
+    Parameters:
+    -----------
+    x : numpy array
+        X coordinates of the data points (irregular grid)
+    y : numpy array
+        Y coordinates of the data points (irregular grid)
+    z : numpy array
+        The data values at each (x,y) point
+    start_point : tuple (x0, y0)
+        Starting point of the line cut
+    end_point : tuple (x1, y1)
+        Ending point of the line cut
+
+    Returns:
+    --------
+    numpy array
+        Z values extracted along the line cut
+    """
+    # Ensure inputs are numpy arrays and flatten if needed
+    x = np.asarray(x).flatten()
+    y = np.asarray(y).flatten()
+    z = np.asarray(z).flatten()
+
+    # Extract start and end points
+    x0, y0 = start_point
+    x1, y1 = end_point
+
+    # Calculate the Euclidean distance between the start and end points
+    total_distance = np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2)
+
+    # Estimate the average grid spacing based on nearest neighbor distances
+    if len(x) > 1:
+        points = np.column_stack((x, y))
+        # Calculate distances between each point and its nearest neighbor
+        dist_matrix = distance.cdist(points, points)
+        np.fill_diagonal(dist_matrix, np.inf)  # Exclude self-distances
+        min_distances = np.min(dist_matrix, axis=1)
+        avg_grid_spacing = np.mean(min_distances)
+    else:
+        avg_grid_spacing = 1.0
+
+    # Determine number of points based on the line length and grid spacing
+    num_points = int(total_distance / avg_grid_spacing) + 1
+    num_points = max(num_points, 2)  # Ensure at least 2 points
+
+    # Create points along the line
+    t = np.linspace(0, 1, num_points)
+    x_line = x0 + t * (x1 - x0)
+    y_line = y0 + t * (y1 - y0)
+
+    # Use griddata to interpolate z values at the line points
+    points = np.column_stack((x, y))
+    line_points = np.column_stack((x_line, y_line))
+
+    # Interpolate using cubic b-splines
+    z_values = interpolate.griddata(points, z, line_points, method='cubic')
+
+    return z_values
 
 
 def image_down_sampling(imag, x, y, res_fac=(0.5, 0.5)):

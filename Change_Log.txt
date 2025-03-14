@@ -48,6 +48,7 @@ change in v0.4.5
 change in v0.4.6
 - added mass extraction for .hdf files in a single folder
 - removed non used buttons in the main .hdf file
+- added linecut extraction
 
 
 
