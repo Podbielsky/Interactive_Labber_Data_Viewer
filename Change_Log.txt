@@ -45,3 +45,9 @@ change in v0.4.5
 - added possibility to modify already drawn lines
 - added selective polynomial bg fit
 
+change in v0.4.6
+- added mass extraction for .hdf files in a single folder
+- removed non used buttons in the main .hdf file
+
+
+

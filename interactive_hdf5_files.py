@@ -1,7 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog
-from tkinter import ttk
-from tkinter import simpledialog
+from tkinter import filedialog, messagebox, ttk, simpledialog
 import h5py
 import numpy as np
 import os
@@ -33,8 +31,7 @@ def data_menu_bar(root, hdf5data):
     data.add_command(label='Save Data as Numpy Array', command=lambda: create_data_array(hdf5data))
     data.add_command(label='Save Traces as Numpy Arrays', command=lambda: create_trace_array(hdf5data))
     data.add_command(label='Calculate Histograms', command=lambda: create_hist_data(hdf5data))
-    data.add_command(label='Extract Rates', command=None)
-    data.add_command(label='Fit Peaks', command=None)
+
     data.add_separator()
     plotting = tk.Menu(menubar, tearoff=0)
     menubar.add_cascade(label='Plotting', menu=plotting)
@@ -63,39 +60,243 @@ def get_unique_filename(filepath):
         counter += 1
 
     return new_filepath
-#%% Hannah Vogel
+# Hannah Vogel
+# Modified by H.D to additionly handle whole folders instead of single files
 def remove_selected_options_window(root, hdf5Data):
-    #Removes selected datasets of selected data file
+    # Removes selected datasets of selected data file
     def confirm_selection():
-        # Add option to apply the confirmed selection to the loaded file
+        # Get the selected groups that will be skipped
         selected_groups = [var.get() for var in vars if var.get()]
+
+        # Create action selection buttons
+        action_frame = tk.Frame(newWindow)
+        action_frame.pack(fill='x', pady=10)
+
+        tk.Label(action_frame, text="Apply to:").pack(side='left', padx=5)
+
+        # Process single file button
+        single_file_button = tk.Button(
+            action_frame,
+            text="Single File",
+            command=lambda: process_single_file(selected_groups)
+        )
+        single_file_button.pack(side='left', padx=5)
+
+        # Process folder button
+        folder_button = tk.Button(
+            action_frame,
+            text="Folder of Files",
+            command=lambda: process_folder(selected_groups)
+        )
+        folder_button.pack(side='left', padx=5)
+
+    def process_single_file(selected_groups):
+        # Original single file processing logic
         dataset = filedialog.askopenfilename(filetypes=[("HDF5 files", "*.hdf5")])
+        if not dataset:  # User canceled
+            return
+
         try:
-            src_file = h5py.File(dataset, 'r') # Öffnen der Quelldatei im Lesemodus
+            src_file = h5py.File(dataset, 'r')  # Open source file in read mode
             unique_dest_filepath = get_unique_filename(dataset.replace('.hdf5', '') + '_reduced.hdf5')
-            dest_file = h5py.File(unique_dest_filepath, 'w') # Öffnen oder Erstellen der Zieldatei im Schreibmodus
-            hdf5Data.skip_selected_objects_recursive_in_copying_process(src_file, dest_file, selected_groups) #uses method of class HDF5Data
+            dest_file = h5py.File(unique_dest_filepath, 'w')  # Open or create destination file in write mode
+
+            # Process status window
+            status_window = create_status_window(newWindow)
+            status_var = status_window['status_var']
+
+            # Update status
+            status_var.set(f"Processing file: {os.path.basename(dataset)}")
+            newWindow.update_idletasks()
+
+            # Process the file
+            hdf5Data.skip_selected_objects_recursive_in_copying_process(src_file, dest_file, selected_groups)
+
             src_file.close()
-            dest_file.close() # Schließen der Dateien nach Abschluss des Kopiervorgangs
-            newWindow.destroy()
+            dest_file.close()
+
+            # Update status and close after delay
+            status_var.set(f"Completed! Output: {os.path.basename(unique_dest_filepath)}")
+            newWindow.update_idletasks()
+            newWindow.after(2000, status_window['window'].destroy)
+
         except Exception as e:
-            print(f"Ein Fehler ist aufgetreten bei remove_selected_options_window: {e}")
+            messagebox.showerror("Error", f"An error occurred: {str(e)}")
+            print(f"An error occurred in process_single_file: {e}")
             traceback.print_exc()
 
-    newWindow = tk.Toplevel(root) #Opens new window (for selecting options).
+    def process_folder(selected_groups):
+        # Select folder containing HDF5 files
+        folder_path = filedialog.askdirectory(title="Select Folder with HDF5 Files")
+        if not folder_path:  # User canceled
+            return
+
+        # Get all HDF5 files in the folder
+        hdf5_files = []
+        for file in os.listdir(folder_path):
+            if file.endswith('.hdf5'):
+                hdf5_files.append(os.path.join(folder_path, file))
+
+        if not hdf5_files:
+            messagebox.showinfo("No Files", "No HDF5 files found in the selected folder.")
+            return
+
+        # Create output folder
+        output_folder = os.path.join(folder_path, "reduced_files")
+        os.makedirs(output_folder, exist_ok=True)
+
+        # Process status window with progress bar
+        status_window = create_status_window(newWindow, show_progress=True)
+        status_var = status_window['status_var']
+        progress_var = status_window['progress_var']
+        progress_bar = status_window['progress_bar']
+
+        # Update initial status
+        status_var.set(f"Processing {len(hdf5_files)} files...")
+        progress_var.set(0)
+        newWindow.update_idletasks()
+
+        # Process each file
+        processed_files = 0
+        error_files = 0
+
+        for i, file_path in enumerate(hdf5_files):
+            try:
+                # Update status for current file
+                file_name = os.path.basename(file_path)
+                status_var.set(f"Processing file {i + 1}/{len(hdf5_files)}: {file_name}")
+                progress_var.set((i / len(hdf5_files)) * 100)
+                newWindow.update_idletasks()
+
+                # Create output file path
+                output_path = os.path.join(
+                    output_folder,
+                    file_name.replace('.hdf5', '') + '_reduced.hdf5'
+                )
+
+                # Open files
+                src_file = h5py.File(file_path, 'r')
+                dest_file = h5py.File(output_path, 'w')
+
+                # Process the file
+                hdf5Data.skip_selected_objects_recursive_in_copying_process(src_file, dest_file, selected_groups)
+
+                # Close files
+                src_file.close()
+                dest_file.close()
+
+                processed_files += 1
+
+            except Exception as e:
+                print(f"Error processing {file_path}: {e}")
+                traceback.print_exc()
+                error_files += 1
+
+        # Update final status
+        progress_var.set(100)
+        status_var.set(f"Completed! Processed: {processed_files}, Errors: {error_files}")
+
+        # Add close button
+        tk.Button(
+            status_window['window'],
+            text="Close",
+            command=status_window['window'].destroy
+        ).pack(pady=5)
+
+    def create_status_window(parent, show_progress=False):
+        # Create a status window for showing processing progress
+        status_window = tk.Toplevel(parent)
+        status_window.title("Processing Status")
+        status_window.geometry("400x150")
+
+        # Make it stay on top of the parent window
+        status_window.transient(parent)
+
+        # Status label
+        status_var = tk.StringVar(value="Processing...")
+        status_label = tk.Label(status_window, textvariable=status_var, wraplength=380)
+        status_label.pack(pady=10, fill='x')
+
+        # Progress bar (optional)
+        progress_var = tk.DoubleVar(value=0)
+        progress_bar = None
+
+        if show_progress:
+            progress_bar = ttk.Progressbar(
+                status_window,
+                variable=progress_var,
+                maximum=100,
+                mode='determinate',
+                length=350
+            )
+            progress_bar.pack(pady=10)
+
+        return {
+            'window': status_window,
+            'status_var': status_var,
+            'progress_var': progress_var,
+            'progress_bar': progress_bar
+        }
+
+
+    # Create the selection window
+    newWindow = tk.Toplevel(root)
     newWindow.title("Select Datasets to Remove")
-    newWindow.geometry("300x300")
-    vars = [] #Empty list
+    newWindow.geometry("400x500")
+
+    # Instructions label
+    tk.Label(
+        newWindow,
+        text="Select datasets to remove from HDF5 files:",
+        wraplength=350
+    ).pack(pady=10)
+
+    # Create a frame with scrollbar for checkbuttons
+    scroll_frame = tk.Frame(newWindow)
+    scroll_frame.pack(fill='both', expand=True, padx=10, pady=5)
+
+    # Create canvas and scrollbar
+    canvas = tk.Canvas(scroll_frame)
+    scrollbar = ttk.Scrollbar(scroll_frame, orient="vertical", command=canvas.yview)
+
+    # Configure canvas
+    checkbutton_frame = tk.Frame(canvas)
+    checkbutton_frame.bind(
+        "<Configure>",
+        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
+
+    canvas.create_window((0, 0), window=checkbutton_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    # Pack scrollbar and canvas
+    scrollbar.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+
+    # Add checkbuttons to the frame
+    vars = []
     for string in list_name:
-        var = tk.StringVar() #creates StringVar for every strign in list_name
-        checkbutton = tk.Checkbutton(newWindow, text=string, variable=var, onvalue=string, offvalue='') #Checkbutton widget for every string
-        checkbutton.pack(anchor='w') #Checkbuttons on the left (west)
-        vars.append(var) #Appends StringVar to list var
+        var = tk.StringVar()
+        checkbutton = tk.Checkbutton(
+            checkbutton_frame,
+            text=string,
+            variable=var,
+            onvalue=string,
+            offvalue=''
+        )
+        checkbutton.pack(anchor='w')
+        vars.append(var)
 
-    confirm_button = tk.Button(newWindow, text="Confirm Selection", command=confirm_selection) #Confirm button to confirm selection
-    confirm_button.pack(pady=10) #places confirm button in the window with 10 pixels distance to lower edge
+    # Add confirm button at the bottom
+    confirm_button = tk.Button(
+        newWindow,
+        text="Confirm Selection",
+        command=confirm_selection
+    )
+    confirm_button.pack(pady=10)
 
-#%%
+
+#
 def save_data_as(hdf5Data):
     pth = filedialog.askdirectory() + '/'
     hdf5Data.set_path(pth + hdf5Data.file_name, 'w')

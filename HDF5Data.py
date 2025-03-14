@@ -198,7 +198,7 @@ class HDF5Data:
         except Exception as e:
             print(f"Error setting HDF5 data: {e}")
 
-    # %% Hannah Vogel
+    #  Hannah Vogel
     def skip_selected_objects_recursive_in_copying_process(self, src, dest, selected_options):
         # to skip datasets selected in checkbutton window in remove_selected_options_window (interactive_hdf5_files)
         for name, item in src.items():
@@ -227,7 +227,7 @@ class HDF5Data:
             except Exception as e:
                 print(f"Error processing {name}: {e}")
 
-    # %%
+    #
 
     def _copy_objects_recursive(self, src, dest):
         for name, item in src.items():
