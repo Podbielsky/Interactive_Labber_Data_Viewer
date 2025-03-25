@@ -49,6 +49,8 @@ change in v0.4.6
 - added mass extraction for .hdf files in a single folder
 - removed non used buttons in the main .hdf file
 - added linecut extraction
+- added fitting of costume defined functions using python syntax including numpy as np and scipy.constants as co
+- changed button layout
 
 
 

@@ -13,6 +13,7 @@ from matplotlib import rc
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
 from scipy.ndimage import gaussian_filter
+from scipy import constants as co
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, evaluate_poly_background_2d,
                                           correct_median_diff, correct_mean_of_lines, gradient_5p_stencil,
                                           subtract_trace_average, cut_data_range, extract_linecut)
@@ -145,6 +146,17 @@ class InteractiveHistogramPlotter:
 
 
 class InteractiveArrayPlotter:
+    """
+    Class for interactive plotting and analysis of multidimensional array data using a graphical user interface.
+
+    The InteractiveArrayPlotter class is designed to enable visualization and interaction with data stored in
+    an HDF5 format. The class integrates several functionalities, including data manipulation, analysis, and
+    rendering plots using Matplotlib. Users can utilize features such as ROI-based data selection, Gaussian
+    filtering, background subtraction, and 2D FFT transformations directly within the interface. The class
+    also supports interactive crosshair visualization, interpolation settings, and trace-specific processes
+    if the dataset contains trace information.
+
+    """
     def __init__(self, root, hdf5data, figure=None, ax=None):
         self.root = root
         self.root.title("Interactive Array Plotter")
@@ -311,27 +323,28 @@ class InteractiveArrayPlotter:
 
         # Create a Frame for the "Plot" buttons
         self.button_frame = tk.Frame(self.root)
-        self.button_frame.pack(side=tk.RIGHT, padx=5, pady=5)
+        self.frame2.pack(side=tk.RIGHT, padx=5, pady=5)
 
         self.auto_scale_check = tk.Checkbutton(
-            self.button_frame,
+            self.frame2,
             text="Auto-scale plot bounds",
             variable=self.auto_scale_var
         )
         self.auto_scale_check.pack(side=tk.TOP, pady=2)
 
         # Create a "Reset Plot" button inside the button frame
-        self.reset_plot_button = ttk.Button(self.button_frame, text="Plot", command=self.plot_data)
+        self.reset_plot_button = ttk.Button(self.frame2, text="Plot", command=self.plot_data)
         self.reset_plot_button.pack(side=tk.TOP, fill=tk.X)
 
         # Create an "Update Plot" button inside the button frame
-        self.update_plot_button = ttk.Button(self.button_frame, text="Update Plot", command=self.update_plot)
+        self.update_plot_button = ttk.Button(self.frame2, text="Update Plot", command=self.update_plot)
         self.update_plot_button.pack(side=tk.TOP, fill=tk.X)
 
         # Create a ''Invert Axes'' Button
         self.invert_button = ttk.Button(self.frame2, text="Invert Axes", command=self.toggle_invert)
         self.invert_button.pack(side=tk.BOTTOM)
 
+        # Create Histogram of displayed data
         self.toolbar.pack(side=tk.BOTTOM, fill=tk.X)
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.histogram_canvas = FigureCanvasTkAgg(self.histogram_fig, master=self.frame2)
@@ -738,7 +751,7 @@ class InteractiveArrayPlotter:
     def open_background_subtraction_window(self):
         self.background_subtraction_window = tk.Toplevel(self.root)
         self.background_subtraction_window.title("Background Subtraction")
-        self.background_subtraction_window.geometry("400x200")
+        self.background_subtraction_window.geometry("400x250")
 
         self.background_subtraction_combobox = ttk.Combobox(self.background_subtraction_window, values=self.bg_methods, state='readonly', width=10)
         self.background_subtraction_combobox.pack(side=tk.TOP, padx=5, pady=5)
@@ -1185,6 +1198,17 @@ class InteractiveArrayPlotter:
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
 
     def apply_fft_trace_correction(self):
+        """
+        Apply FFT trace correction to adjust traces based on FFT-derived cuts.
+
+        This method applies Fast Fourier Transform (FFT) correction by obtaining
+        cuts from the FFT axis, closing the FFT plot figure, and then applying
+        the correction to the traces using these cuts. The function subsequently
+        destroys and updates the FFT plot window to complete the operation.
+
+        :raises RuntimeError: If the FFT correction process encounters an error.
+
+        """
         #### Modified by Nico R. ####
         self.cuts = get_cuts(self.fft_ax)
         print(self.cuts)
@@ -1258,9 +1282,6 @@ class InteractiveArrayPlotter:
 
         line = self.drawn_lines_list[self.editing_line_index]
         start_point, end_point = line
-
-        # Get the current data
-
 
         # Extract the line cut using the extract_linecut function
         linecut_result = extract_linecut(self.X, self.Y, self.sliced_data, start_point, end_point)
@@ -1904,6 +1925,12 @@ class UtilityLinePlotter:
         self.line_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
         self.line_listbox.bind('<<ListboxSelect>>', self.on_line_select)
 
+        # Create Context menu
+        self.line_context_menu = tk.Menu(self.line_listbox, tearoff=0)
+        self.line_context_menu.add_command(label="Offset and Scale", command=self.open_offset_scale_window)
+        self.line_context_menu.add_command(label="Fit Model", command=self.open_fit_custom_model)
+        self.line_listbox.bind("<Button-3>", self.show_line_context_menu)
+
         # Add control buttons
         btn_frame = ttk.Frame(sidebar_frame)
         btn_frame.pack(fill=tk.X, pady=5)
@@ -1948,6 +1975,23 @@ class UtilityLinePlotter:
         self.line_listbox.selection_set(self.selected_line_idx)
         self.update_plot()
 
+    def show_line_context_menu(self, event):
+        """Show the context menu on right-click in the lines listbox"""
+        # Get the line index at the current mouse position
+        try:
+            index = self.line_listbox.nearest(event.y)
+            # Only show menu if we clicked on an actual line
+            if index < len(self.data):
+                # Select the line first
+                self.line_listbox.selection_clear(0, tk.END)
+                self.line_listbox.selection_set(index)
+                self.line_listbox.activate(index)
+                # Show the context menu
+                self.line_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            # Make sure to release the menu
+            self.line_context_menu.grab_release()
+
     def on_line_select(self, event):
         """Handle selection of a line from the listbox."""
         selection = self.line_listbox.curselection()
@@ -1975,6 +2019,218 @@ class UtilityLinePlotter:
         self.line_listbox.delete(0, tk.END)
         self.selected_line_idx = None
         self.update_plot()
+
+    def apply_offset_scale(self, x_offset, y_offset, x_scale, y_scale, dialog=None):
+        """
+        Apply offset and scale to the selected line.
+
+        Parameters:
+        -----------
+        x_offset : float
+            Value to add to x coordinates
+        y_offset : float
+            Value to add to y coordinates
+        x_scale : float
+            Factor to multiply x coordinates by
+        y_scale : float
+            Factor to multiply y coordinates by
+        dialog : Toplevel, optional
+            Dialog window to close after applying
+        """
+        if self.selected_line_idx is None or self.selected_line_idx >= len(self.data):
+            if dialog:
+                dialog.destroy()
+            return
+
+        # Get the selected data
+        x_data, y_data, label = self.data[self.selected_line_idx]
+
+        # Apply transformations
+        new_x = x_data * x_scale + x_offset
+        new_y = y_data * y_scale + y_offset
+
+        # Replace the data with the modified version
+        self.data[self.selected_line_idx] = (new_x, new_y, label)
+
+        # Close the dialog if provided
+        if dialog:
+            dialog.destroy()
+
+        # Update the plot
+        self.update_plot()
+
+    def open_offset_scale_window(self):
+        """Open a dialog to input offset and scaling parameters for the selected line."""
+        if self.selected_line_idx is None or self.selected_line_idx >= len(self.data):
+            messagebox.showinfo("No Selection", "Please select a line to modify.")
+            return
+
+        # Create a new dialog window
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Offset and Scale Line")
+        dialog.geometry("300x270")
+        #dialog.resizable(False, False)
+        #dialog.transient(self.root)  # Set as transient to main window
+        #dialog.grab_set()  # Make dialog modal
+
+        # Define the fields needed
+        fields = [
+            ("X Offset:", "x_offset", 0.0),
+            ("Y Offset:", "y_offset", 0.0),
+            ("X Scale Factor:", "x_scale", 1.0),
+            ("Y Scale Factor:", "y_scale", 1.0)
+        ]
+
+        # Dictionary to store the variable references
+        vars_dict = {}
+
+        # Create input fields with labels using a loop
+        for i, (label_text, var_name, default_value) in enumerate(fields):
+            ttk.Label(dialog, text=label_text).grid(row=i, column=0, padx=10, pady=10, sticky=tk.W)
+            vars_dict[var_name] = tk.DoubleVar(value=default_value)
+            ttk.Entry(dialog, textvariable=vars_dict[var_name], width=15).grid(row=i, column=1, padx=10, pady=10)
+
+        # Create buttons
+        button_frame = ttk.Frame(dialog)
+        button_frame.grid(row=len(fields), column=0, columnspan=2, pady=15)
+
+        ttk.Button(button_frame, text="Apply",
+                   command=lambda: self.apply_offset_scale(
+                       vars_dict["x_offset"].get(),
+                       vars_dict["y_offset"].get(),
+                       vars_dict["x_scale"].get(),
+                       vars_dict["y_scale"].get(),
+                       dialog)).pack(side=tk.LEFT, padx=10)
+
+        ttk.Button(button_frame, text="Cancel",
+                   command=dialog.destroy).pack(side=tk.LEFT, padx=10)
+
+    def open_fit_custom_model(self):
+        """Open a dialog to define and fit a custom model to the selected line."""
+        if self.selected_line_idx is None or self.selected_line_idx >= len(self.data):
+            messagebox.showinfo("No Selection", "Please select a line to fit.")
+            return
+
+        # Create a new dialog window
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Fit Custom Model")
+        dialog.geometry("400x350")
+
+        # Get the selected data
+        x_data, y_data, label = self.data[self.selected_line_idx]
+
+        # Create the model definition frame
+        model_frame = ttk.LabelFrame(dialog, text="Custom Model Definition")
+        model_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Model expression input
+        ttk.Label(model_frame, text="Model Expression:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        model_expr_var = tk.StringVar(value="a*x + b")  # Default is a linear model
+        model_expr_entry = ttk.Entry(model_frame, textvariable=model_expr_var, width=30)
+        model_expr_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(model_frame, text="Example: a*np.exp(-x/b) + c").grid(row=1, column=0, columnspan=2, sticky=tk.W,
+                                                                        padx=5)
+
+        # Parameter frame
+        param_frame = ttk.LabelFrame(model_frame, text="Initial Parameters")
+        param_frame.grid(row=2, column=0, columnspan=2, sticky=tk.NSEW, padx=5, pady=10)
+
+        # Default parameters (a and b for linear model)
+        param_vars = {}
+        param_entries = {}
+
+        # Initial parameters for default linear model
+        param_vars['a'] = tk.DoubleVar(value=1.0)
+        param_vars['b'] = tk.DoubleVar(value=0.0)
+
+        ttk.Label(param_frame, text="a:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        param_entries['a'] = ttk.Entry(param_frame, textvariable=param_vars['a'], width=10)
+        param_entries['a'].grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(param_frame, text="b:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        param_entries['b'] = ttk.Entry(param_frame, textvariable=param_vars['b'], width=10)
+        param_entries['b'].grid(row=1, column=1, padx=5, pady=5)
+
+        # Function to update parameters when the model expression changes
+        def update_params(*args):
+            # Clear existing parameter entries
+            for widget in param_frame.winfo_children():
+                widget.destroy()
+
+            # Extract parameter names from the expression
+            expr = model_expr_var.get()
+            params = set()
+            import re
+            for match in re.finditer(r'\b([a-zA-Z](?!\w*\())\b', expr):
+                param = match.group(1)
+                if param != 'x' and param != 'np' and param != 'co' :  # Skip x variable and numpy
+                    params.add(param)
+
+            # Create entries for each parameter
+            param_vars.clear()
+            param_entries.clear()
+            for i, param in enumerate(sorted(params)):
+                param_vars[param] = tk.DoubleVar(value=1.0)
+                ttk.Label(param_frame, text=f"{param}:").grid(row=i, column=0, sticky=tk.W, padx=5, pady=5)
+                param_entries[param] = ttk.Entry(param_frame, textvariable=param_vars[param], width=10)
+                param_entries[param].grid(row=i, column=1, padx=5, pady=5)
+
+        # Bind the model expression entry to update parameters
+        model_expr_var.trace("w", update_params)
+
+        # Buttons frame
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(fill=tk.X, pady=10)
+
+        def fit_model():
+            try:
+                # Get the model expression and parameter values
+                expr = model_expr_var.get()
+                params = {param: var.get() for param, var in param_vars.items()}
+
+                # Create the model function
+                def model_func(x, *args):
+                    # Create a namespace with parameters assigned to their values
+                    param_dict = {name: value for name, value in zip(params.keys(), args)}
+                    # Add x to the namespace
+                    param_dict['x'] = x
+                    # Add numpy functions
+                    param_dict['np'] = np
+                    #  Add scipy.constants
+                    param_dict['co'] = co
+                    # Evaluate the expression
+                    return eval(expr, {"__builtins__": {}}, param_dict)
+
+                # Initial parameter values
+                p0 = [params[param] for param in sorted(params.keys())]
+
+                # Fit the model
+                from scipy import optimize
+                popt, pcov = optimize.curve_fit(model_func, x_data, y_data, p0=p0)
+
+                # Fit results
+                fit_params = {param: val for param, val in zip(sorted(params.keys()), popt)}
+
+                # Generate fitted curve
+                fit_y = model_func(x_data, *popt)
+
+                # Add the fitted curve as a new linecut
+                self.add_linecut(x_data, fit_y, f"Fit: {label}")
+
+                # Show the fitted parameters
+                result_text = "Fitted parameters:\n"
+                for param, value in fit_params.items():
+                    result_text += f"{param} = {value:.6g}\n"
+                messagebox.showinfo("Fit Results", result_text)
+
+                dialog.destroy()
+
+            except Exception as e:
+                messagebox.showerror("Fit Error", f"Error fitting model: {str(e)}")
+
+        ttk.Button(button_frame, text="Fit", command=fit_model).pack(side=tk.LEFT, padx=10)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT, padx=10)
 
     def is_alive(self):
         """Check if the toplevel window still exists and is not destroyed."""

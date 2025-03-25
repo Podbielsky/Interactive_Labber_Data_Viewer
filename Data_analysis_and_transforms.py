@@ -502,7 +502,7 @@ def cut_data_range(x_grid, y_grid, z_data, x_range, y_range):
 
 
 
-### from down here: work in progress
+### from down here: work in progress (some parts are already refactored into gamma maps)
 
 def gaussian(x, a, mu, sigma):
     '''
