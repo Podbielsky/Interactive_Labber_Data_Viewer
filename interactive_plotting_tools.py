@@ -1863,10 +1863,6 @@ class UtilityLinePlotter:
         """
         Initialize a utility plotter for line cuts.
 
-        Parameters:
-        -----------
-        master : Tk window
-            Parent window, if None a new Tk window will be created
         """
         if master is None:
             self.root = tk.Tk()
@@ -1929,6 +1925,7 @@ class UtilityLinePlotter:
         self.line_context_menu = tk.Menu(self.line_listbox, tearoff=0)
         self.line_context_menu.add_command(label="Offset and Scale", command=self.open_offset_scale_window)
         self.line_context_menu.add_command(label="Fit Model", command=self.open_fit_custom_model)
+        self.line_context_menu.add_command(label="Export Line Trace", command=self.open_export_window)
         self.line_listbox.bind("<Button-3>", self.show_line_context_menu)
 
         # Add control buttons
@@ -2051,10 +2048,6 @@ class UtilityLinePlotter:
 
         # Replace the data with the modified version
         self.data[self.selected_line_idx] = (new_x, new_y, label)
-
-        # Close the dialog if provided
-        if dialog:
-            dialog.destroy()
 
         # Update the plot
         self.update_plot()
@@ -2224,13 +2217,79 @@ class UtilityLinePlotter:
                     result_text += f"{param} = {value:.6g}\n"
                 messagebox.showinfo("Fit Results", result_text)
 
-                dialog.destroy()
 
             except Exception as e:
                 messagebox.showerror("Fit Error", f"Error fitting model: {str(e)}")
 
         ttk.Button(button_frame, text="Fit", command=fit_model).pack(side=tk.LEFT, padx=10)
         ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT, padx=10)
+
+    def open_export_window(self):
+        """Open a dialog to export the selected line trace as text or numpy file."""
+        if self.selected_line_idx is None or self.selected_line_idx >= len(self.data):
+            messagebox.showinfo("No Selection", "Please select a line trace to export.")
+            return
+
+        # Get the selected data
+        x_data, y_data, label = self.data[self.selected_line_idx]
+
+        # Create a new dialog window
+        export_dialog = tk.Toplevel(self.root)
+        export_dialog.title("Export Line Trace")
+        export_dialog.geometry("300x150")
+        export_dialog.transient(self.root)
+        export_dialog.grab_set()
+
+        # Add info label
+        info_label = ttk.Label(export_dialog, text=f"Export data for: {label}")
+        info_label.pack(pady=(10, 20))
+
+        # Button frame
+        button_frame = ttk.Frame(export_dialog)
+        button_frame.pack(fill=tk.X, pady=10)
+
+        def export_as_text():
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                initialfile=f"{label.replace(' ', '_')}.txt"
+            )
+            if file_path:
+                try:
+                    with open(file_path, 'w') as f:
+                        f.write("# X\tY\n")
+                        for x, y in zip(x_data, y_data):
+                            f.write(f"{x}\t{y}\n")
+                    messagebox.showinfo("Export Successful", f"Data exported to {file_path}")
+                    export_dialog.destroy()
+                except Exception as e:
+                    messagebox.showerror("Export Error", f"Error exporting data: {str(e)}")
+
+        def export_as_numpy():
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".npy",
+                filetypes=[("NumPy files", "*.npy"), ("All files", "*.*")],
+                initialfile=f"{label.replace(' ', '_')}.npy"
+            )
+            if file_path:
+                try:
+                    data_array = np.column_stack((x_data, y_data))
+                    np.save(file_path, data_array)
+                    messagebox.showinfo("Export Successful", f"Data exported to {file_path}")
+                    export_dialog.destroy()
+                except Exception as e:
+                    messagebox.showerror("Export Error", f"Error exporting data: {str(e)}")
+
+        # Export buttons
+        txt_button = ttk.Button(button_frame, text="Export as Text", command=export_as_text)
+        txt_button.pack(side=tk.LEFT, expand=True, padx=10)
+
+        numpy_button = ttk.Button(button_frame, text="Export as NumPy", command=export_as_numpy)
+        numpy_button.pack(side=tk.RIGHT, expand=True, padx=10)
+
+        # Cancel button
+        cancel_button = ttk.Button(export_dialog, text="Cancel", command=export_dialog.destroy)
+        cancel_button.pack(pady=10)
 
     def is_alive(self):
         """Check if the toplevel window still exists and is not destroyed."""

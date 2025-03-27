@@ -23,7 +23,7 @@ IF EXIST "%ENV_NAME%\Scripts\activate.bat" (
 
     REM Copy Python scripts to the Scripts directory of the virtual environment
     copy "%~dp0interactive_hdf5_files.py" "%ENV_NAME%\Scripts"
-    copy "%~dp0creatinghdf5_files_from_npy_files.py" "%ENV_NAME%\Scripts"
+    copy "%~dp0creating_hdf5_files_from_npy_files.py" "%ENV_NAME%\Scripts"
     copy "%~dp0HDF5Data.py" "%ENV_NAME%\Scripts"
     copy "%~dp0interactive_plotting_tools.py" "%ENV_NAME%\Scripts"
     copy "%~dp0Data_analysis_and_transforms.py" "%ENV_NAME%\Scripts"
