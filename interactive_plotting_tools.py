@@ -16,7 +16,8 @@ from scipy.ndimage import gaussian_filter
 from scipy import constants as co
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, evaluate_poly_background_2d,
                                           correct_median_diff, correct_mean_of_lines, gradient_5p_stencil,
-                                          subtract_trace_average, cut_data_range, extract_linecut)
+                                          subtract_trace_average, cut_data_range, extract_linecut,
+                                          skewed_gaussian_func_shape, beta_func_shape)
 from gamma_map import (get_t_rates, get_fourier, fft_correction_select, fft_correction_apply, get_cuts)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap
 neon_cmap = make_neon_cyclic_colormap()
@@ -2157,7 +2158,7 @@ class UtilityLinePlotter:
             import re
             for match in re.finditer(r'\b([a-zA-Z](?!\w*\())\b', expr):
                 param = match.group(1)
-                if param != 'x' and param != 'np' and param != 'co' :  # Skip x variable and numpy
+                if param != 'x' and param != 'np' and param != 'co' and param != 'sp':  # Skip x variable and numpy
                     params.add(param)
 
             # Create entries for each parameter

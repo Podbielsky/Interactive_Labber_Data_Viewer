@@ -4,6 +4,7 @@ from scipy.ndimage import gaussian_filter1d, gaussian_filter
 from scipy.spatial import KDTree
 from scipy.signal import find_peaks
 from scipy.optimize import curve_fit
+from scipy.special import beta, erf
 from scipy.fft import fft2, fftfreq, fftshift
 
 
@@ -25,6 +26,54 @@ def interpolate_2d_results(imag, x, y, grid):
     result = np.array(interpolate.griddata(cor, imag, grid, method='linear', fill_value=0))
     return result
 
+def beta_func_shape(x, a, b, scale):
+    """
+    Computes the scaled beta distribution shape function at a given point x with
+    specified parameters a, b, and scale.
+
+    This function calculates the product of the beta function for parameters `a`
+    and `b` and the power terms that scale the input. The beta distribution is
+    frequently used in probability theory and statistics for modeling random
+    variables limited to intervals of finite length.
+
+    :param x: The input value where the beta distribution is evaluated.
+    :param a: The alpha parameter of the beta distribution, which controls
+        the shape of the curve.
+    :param b: The beta parameter of the beta distribution, which controls
+        the shape of the curve.
+    :param scale: A scaling factor applied to the input value `x`, defining
+        the range for the beta distribution.
+    :return: The computed value of the scaled beta function for the given
+        inputs.
+    :rtype: float
+    """
+    return beta(a, b) * ((scale * x) ** (a - 1)) * ((1 - scale * x) ** (b - 1))
+
+def skewed_gaussian_func_shape(x, x0, sigma, alpha):
+    """
+    Computes the shape of a skewed Gaussian distribution given the input `x`,
+    distribution mean `x0`, standard deviation `sigma`, and skewness `alpha`.
+    Combines the Gaussian cumulative and probability density functions to
+    achieve skewness in the distribution.
+
+    :param x: The input variable around which the skewed Gaussian shape is
+        computed.
+    :type x: float or numpy.ndarray
+    :param x0: The mean or central value of the distribution.
+    :type x0: float
+    :param sigma: The standard deviation, represents the spread of the
+        distribution.
+    :type sigma: float
+    :param alpha: The skewness parameter; positive values skew to the right
+        while negative values skew to the left.
+    :type alpha: float
+    :return: The skewed Gaussian value(s) corresponding to the input `x`.
+    :rtype: float or numpy.ndarray
+    """
+    z = (x - x0) / sigma
+    gauss_cum = 1/2 * (1 + erf(alpha * z/np.sqrt(2)))
+    gauss_dis = 1/np.sqrt(2*np.pi) * np.exp(-z**2/2)
+    return 2 / sigma * gauss_dis * gauss_cum
 
 def extract_linecut(x, y, z, start_point, end_point):
     """

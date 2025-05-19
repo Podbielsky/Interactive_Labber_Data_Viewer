@@ -10,19 +10,13 @@ TODO list for next versions:
 
 - implement external traces
 
-- variable range plotting for dedicated areas
-
 - rescaling of line-plots in the line-cut section should be improved to get better visibility
-
-- implement first/last few line average subtraction
 
 - implement fourier filter
 
-- implement removal of meta-data for whole directory
-
-(maybe add functionality to plot single traces and perform fits on them, should be done after .npy read-in works.
+-maybe add functionality to plot single traces and perform fits on them, should be done after .npy read-in works.
  Should include mulit column read in for hdf5 data and multi-trace selection.
-  Implementation should be a new line plotting class which would also be used in line-cuts)
+  Implementation should be a new line plotting class which would also be used in line-cuts
 
 - low priority: implement multithreading for i/o and calculation to create a smoother experience
 
