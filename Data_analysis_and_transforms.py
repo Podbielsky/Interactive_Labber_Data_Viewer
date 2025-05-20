@@ -133,7 +133,7 @@ def extract_linecut(x, y, z, start_point, end_point):
     line_points = np.column_stack((x_line, y_line))
 
     # Interpolate using cubic b-splines
-    z_values = interpolate.griddata(points, z, line_points, method='cubic')
+    z_values = interpolate.griddata(points, z, line_points, method='linear')
 
     return z_values
 
