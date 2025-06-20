@@ -51,6 +51,5 @@ change in v0.4.6
 - added linecut extraction
 - added fitting of costume defined functions using python syntax including numpy as np and scipy.constants as co
 - changed button layout
-
-
+- added interactive fft-filter
 
