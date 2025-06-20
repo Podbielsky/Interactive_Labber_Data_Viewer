@@ -201,12 +201,73 @@ def two_d_fft_on_data(imag, x, y, mode='Amplitude'):
     data_on_regular_grid = interpolate_2d_results(imag, x, y, (xg, yg))
     if mode == 'Amplitude':
         fft_amp = fftshift(np.abs(fft2(data_on_regular_grid - np.mean(data_on_regular_grid), norm='ortho')))
-    if mode == 'Phase':
+    elif mode == 'Phase':
         fft_amp = fftshift(np.angle(fft2(data_on_regular_grid, norm='ortho')))
-    if mode == 'Complex':
+    elif mode == 'Complex':
         fft_amp = fftshift(fft2(data_on_regular_grid, norm='ortho'))
+    else:
+        raise ValueError("Invalid mode. Choose from 'Amplitude', 'Phase', or 'Complex'.")
     ixg, iyg = np.meshgrid(fftshift(fftfreq(int(x_num), dx)), fftshift(fftfreq(int(y_num), dy)))
+    
     return ixg, iyg, fft_amp
+
+
+def two_d_ifft_on_data(fft_data, ixg, iyg, mode='Amplitude'):
+    """
+    Performs a 2D Inverse Fast Fourier Transform (IFFT) operation on frequency-domain data
+    and returns the reconstructed spatial-domain data. The input data is assumed to be
+    on a regular frequency grid.
+
+    :param fft_data:
+        A 2D array representing the input frequency-domain data to be transformed.
+
+    :param ixg:
+        A 2D array representing the frequency grid in the x-direction.
+
+    :param iyg:
+        A 2D array representing the frequency grid in the y-direction.
+
+    :param mode:
+        A string specifying the desired output type of the IFFT. Options include:
+        - 'Amplitude': Returns the amplitude of the reconstructed data.
+        - 'Phase': Returns the phase of the reconstructed data.
+        - 'Complex': Returns the full complex IFFT result.
+        Defaults to 'Amplitude'.
+
+    :return:
+        A tuple containing three elements:
+        - xg: The spatial grid corresponding to the x-direction after IFFT.
+        - yg: The spatial grid corresponding to the y-direction after IFFT.
+        - reconstructed_data: The resulting 2D spatial-domain data, calculated based on the selected mode.
+    """
+    # Perform the inverse FFT
+    ifft_result = np.fft.ifft2(np.fft.ifftshift(fft_data), norm='ortho')
+
+    # Extract the desired mode
+    if mode == 'Amplitude':
+        reconstructed_data = np.abs(ifft_result)
+    elif mode == 'Phase':
+        reconstructed_data = np.angle(ifft_result)
+    elif mode == 'Complex':
+        reconstructed_data = ifft_result
+    else:
+        raise ValueError("Invalid mode. Choose from 'Amplitude', 'Phase', or 'Complex'.")
+
+    # Generate spatial grids based on the frequency grids
+    freq_diff_x = ixg[0, 1] - ixg[0, 0]
+    freq_diff_y = iyg[1, 0] - iyg[0, 0]
+
+    if freq_diff_x == 0 or freq_diff_y == 0:
+        raise ValueError("Frequency grid differences must be non-zero.")
+
+    dx = 1 / freq_diff_x
+    dy = 1 / freq_diff_y
+
+    xg = np.linspace(-0.5 * dx, 0.5 * dx, fft_data.shape[1])
+    yg = np.linspace(-0.5 * dy, 0.5 * dy, fft_data.shape[0])
+    xg, yg = np.meshgrid(xg, yg)
+
+    return xg, yg, reconstructed_data
 
 
 def evaluate_poly_background_2d(x, y, z, order_x, order_y,

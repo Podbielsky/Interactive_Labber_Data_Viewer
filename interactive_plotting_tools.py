@@ -12,9 +12,12 @@ from matplotlib import lines
 from matplotlib import rc
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
+import matplotlib.colors as colors
+from matplotlib.path import Path
+from matplotlib.transforms import TransformedPath
 from scipy.ndimage import gaussian_filter
 from scipy import constants as co
-from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, evaluate_poly_background_2d,
+from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, two_d_ifft_on_data, evaluate_poly_background_2d,
                                           correct_median_diff, correct_mean_of_lines, gradient_5p_stencil,
                                           subtract_trace_average, cut_data_range, extract_linecut,
                                           skewed_gaussian_func_shape, beta_func_shape)
@@ -164,7 +167,7 @@ class InteractiveArrayPlotter:
 
         # Initialize attributes
         self.data = hdf5data
-        #### Created by Nico R.  for trace loading validation
+        #### Created by Nico Reinders  for trace loading validation
         self.contains_traces = 'Traces' in list(hdf5data.file.keys())
         ####
         self.name_data_z = ''
@@ -217,7 +220,8 @@ class InteractiveArrayPlotter:
         if self.contains_traces:
             self.tool_menu.add_command(label="Correct Trace Fourier spectrum", command=self.open_fft_trace_correction_window)
         self.menubar.add_cascade(label="Tools", menu=self.tool_menu)
-
+        self.tool_menu.add_command(label="2-D FFT Filter", command=self.open_2d_fft_filter)
+        
         # Create Help Menu
         self.help_menu = tk.Menu(self.menubar, tearoff=0)
         self.help_menu.add_command(label="About", command=self.show_about)
@@ -273,6 +277,7 @@ class InteractiveArrayPlotter:
         self.move_cid = None
         self.motion_cid = None
         self.release_cid = None
+        self.start_point = None # Added by Nico Reinders for error handling in 2D FFT filter
 
         # Pre calculate values for selection
         self.parameter_labels = [np.flip(self.data.name_axis)[i] for i in range(self.num_dimensions)]
@@ -352,6 +357,7 @@ class InteractiveArrayPlotter:
         self.histogram_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True, anchor=tk.N)
         self.plot_data()
         self.canvas.mpl_connect('key_press_event', self.on_key_press)
+        
 
     def plot_data(self):
         tick = time.perf_counter()
@@ -405,7 +411,7 @@ class InteractiveArrayPlotter:
             self.name_data_z = self.data_combobox.get()
             self.name_data_x_axis = str(np.flip(self.data.name_axis)[-1])
             self.name_data_y_axis = str(np.flip(self.data.name_axis)[-2])
-        #### Modified by Nico R. ####
+        #### Modified by Nico Reinders ####
         if self.invert_enabled:
             self.X = ((np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(0, 1).reshape(
                 np.flip(self.data.measure_dim))[tuple(selected_indices)]))
@@ -441,7 +447,7 @@ class InteractiveArrayPlotter:
                     self.sliced_data = self.gamma_up.transpose()
                 elif self.data_combobox.get() == "Tunneling rates out":
                     self.sliced_data = self.gamma_down.transpose()
-            #### end of Modification by Nico R. ####
+            #### end of Modification by Nico Reinders ####
             self.ax.clear()
             self.xlim = (np.min(self.X), np.max(self.X))
             self.ylim = (np.min(self.Y), np.max(self.Y))
@@ -971,7 +977,9 @@ class InteractiveArrayPlotter:
         self.data_axis_transform_scaling_frame.pack(side=tk.RIGHT)
 
     def open_fft_trace_correction_window(self):
-        #### Created by Nico R. ####
+        #### Created by Nico Reinders ####
+        # Opens the FFT trace correction window.
+
         # Create a new Toplevel window
         self.fft_plot_window = tk.Toplevel(self.root)
         self.fft_plot_window.title("FFT Correction")
@@ -1005,6 +1013,282 @@ class InteractiveArrayPlotter:
         open_plot_button = ttk.Button(self.fft_plot_window, text="Apply changes", command=self.apply_fft_trace_correction)
         open_plot_button.pack(pady=20)
 
+    def open_2d_fft_filter(self):
+        #### Created by Nico Reinders ####
+        # Opens the 2D FFT filter tool window.
+
+        # Create a new Toplevel window
+        self.fft_filter_window = tk.Toplevel(self.root)
+        self.fft_filter_window.title("2-D FFT Filter")
+
+        left_frame = tk.Frame(self.fft_filter_window)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=1)
+
+        # Create a Matplotlib figure and axis for the FFT filter
+        self.fft_filter_fig, self.fft_filter_ax = plt.subplots(1, 1, figsize=(8, 8))
+        
+        self.fft_filter_canvas = FigureCanvasTkAgg(self.fft_filter_fig, master=left_frame)
+        self.fft_filter_canvas.draw_idle()
+        self.fft_filter_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
+
+        self.fft_filter_toolbar = NavigationToolbar2Tk(self.fft_filter_canvas, left_frame)
+        self.fft_filter_toolbar.update()
+        self.fft_filter_toolbar.pack(side=tk.BOTTOM, fill=tk.X)
+
+        right_frame = tk.Frame(self.fft_filter_window)
+        right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
+
+        # Create radio buttons for selecting the preview mode
+        radio_frame = tk.Frame(right_frame)
+        radio_frame.pack(side=tk.TOP, fill=tk.X, pady=25)
+        self.fft_filter_mode = tk.StringVar(value='Mask Editor')
+        tk.Radiobutton(radio_frame, text='Mask Editor', variable=self.fft_filter_mode, value='Mask Editor', command=self.update_fft_filter_plot).pack(anchor=tk.W)
+        tk.Radiobutton(radio_frame, text='Filtered Data Preview', variable=self.fft_filter_mode, value='Filtered Data Preview', command=self.update_fft_filter_plot).pack(anchor=tk.W)
+
+        # Create selection shape buttons 
+        shape_frame = tk.Frame(right_frame)
+        shape_frame.pack(side=tk.TOP, fill=tk.X, pady=25)
+        self.selection_shape = tk.StringVar(value='Ellipse')
+        self.ellipse_button = tk.Button(shape_frame, text='Ellipse', command=self.select_ellipse, relief='sunken')
+        self.ellipse_button.pack(side=tk.LEFT, padx=5)
+        self.rectangle_button = tk.Button(shape_frame, text='Rectangle', command=self.select_rect, relief='raised')
+        self.rectangle_button.pack(side=tk.LEFT, padx=5) 
+        
+        apply_frame = tk.Frame(right_frame)
+        apply_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
+        tk.Button(apply_frame, text='Apply Filter', command=self.apply_fft_filter).pack(side=tk.LEFT, padx=5)   
+        
+        # Add option to toggle the mask outside (negative) checkbox
+        mask_frame = tk.Frame(right_frame)
+        mask_frame.pack(side=tk.TOP, fill=tk.X, pady=25)
+        self.fft_mask_negative = tk.BooleanVar(value=False)
+        self.fft_mask_checkbox = tk.Checkbutton(mask_frame, text="Mask Outside (Negative)", variable=self.fft_mask_negative, command=self.update_fft_filter_plot)
+        self.fft_mask_checkbox.pack(anchor=tk.N)
+        
+        self.shapes = np.array([]) # initialize shapes array to store drawn masks
+        
+        self.fft_filter_x, self.fft_filter_y, self.fft_filter_sliced_data = two_d_fft_on_data(self.sliced_data, self.X, self.Y, mode='Complex')	
+        self.vmin, self.vmax = np.absolute(self.fft_filter_sliced_data).min(), np.absolute(self.fft_filter_sliced_data).max()
+        
+        # Compute cell centers 
+        self.xc = (self.fft_filter_x[:-1, :-1] + self.fft_filter_x[1:, 1:]) / 2
+        self.yc = (self.fft_filter_y[:-1, :-1] + self.fft_filter_y[1:, 1:]) / 2
+        # Flatten for vectorized testing
+        self.points = np.vstack((self.xc.ravel(), self.yc.ravel())).T
+        
+        # Connect the event handlers
+        self.fft_filter_fig.canvas.mpl_connect('button_press_event', self.fft_filter_on_press)
+        self.fft_filter_fig.canvas.mpl_connect('button_release_event', self.fft_filter_on_release)
+        self.fft_filter_fig.canvas.mpl_connect('motion_notify_event', self.fft_filter_on_motion)
+        
+        self.update_fft_filter_plot()
+
+    def apply_fft_mask(self, fft_filter_sliced_data_cut):
+        #### Created by Nico Reinders ####
+        # Combines all shape masks and applies them to the FFT data.
+
+        combined_mask = np.ones_like(fft_filter_sliced_data_cut[:-1, :-1], dtype=bool)
+        for patch in self.shapes:
+            patch_path = Path(patch.get_verts())
+            mask = patch_path.contains_points(self.fft_filter_ax.transData.transform(self.points))
+            mask = mask.reshape(self.xc.shape)
+            mask = 1-mask
+            combined_mask = np.logical_and(combined_mask, mask)
+            
+        if self.fft_mask_negative.get():
+            combined_mask = 1 - combined_mask
+        fft_filter_sliced_data_cut[:-1, :-1] *= combined_mask
+
+        return fft_filter_sliced_data_cut
+    
+    
+    def apply_fft_filter(self):
+        #### Created by Nico Reinders ####
+        # Finally applies the combined FFT mask and performs the inverse FFT.
+
+        _, _, self.fft_filter_sliced_data = two_d_fft_on_data(self.sliced_data, self.X, self.Y, mode='Complex')
+        self.fft_filter_sliced_data_cut = self.apply_fft_mask(self.fft_filter_sliced_data)
+        
+        self.fft_filter_sliced_data_preview = two_d_ifft_on_data(self.fft_filter_sliced_data_cut, self.fft_filter_x, self.fft_filter_y, mode='Complex')[2]
+        self.sliced_data = np.abs(self.fft_filter_sliced_data_preview)
+
+    def select_ellipse(self):
+        #### Created by Nico Reinders ####
+        # Handles ellipse selection for FFT mask drawing.
+
+        if self.selection_shape.get() == 'Ellipse':
+            self.selection_shape.set('Empty')
+            self.ellipse_button.config(relief='raised')
+        else:    
+            self.selection_shape.set('Ellipse')
+            self.ellipse_button.config(relief='sunken')
+            self.rectangle_button.config(relief='raised')
+    
+    def select_rect(self):
+        #### Created by Nico Reinders ####
+        # Handles rectangle selection for FFT mask drawing.
+
+        if self.selection_shape.get() == 'Rectangle':
+            self.selection_shape.set('Empty')
+            self.rectangle_button.config(relief='raised')
+        else:
+            self.selection_shape.set('Rectangle')
+            self.ellipse_button.config(relief='raised')
+            self.rectangle_button.config(relief='sunken')
+
+    def fft_filter_on_press(self, event):
+        #### Created by Nico Reinders ####
+        # Handles mouse press event for FFT mask drawing.
+
+        if event.button == 1:  # Left mouse button
+            self.start_point = (event.xdata, event.ydata)
+
+    def fft_filter_on_motion(self, event):
+        #### Created by Nico Reinders ####
+        # Handles mouse motion event for FFT mask drawing.
+
+        # Check for valid coordinates before proceeding
+        if (
+            self.start_point is None or
+            self.start_point[0] is None or
+            self.start_point[1] is None or
+            event.xdata is None or
+            event.ydata is None
+        ):
+            return  # Ignore the event if coordinates are not valid
+        
+        if event.button == 1 and self.start_point and self.fft_filter_mode.get() == 'Mask Editor':   
+            x0, y0 = self.start_point
+            x1, y1 = event.xdata, event.ydata
+            width =  x1 - x0
+            height = y1 - y0
+            center_x = (x0 + x1) / 2
+            center_y = (y0 + y1) / 2
+            
+            if hasattr(self, 'preview_ellipse'):
+                self.preview_ellipse.remove()
+            
+            if hasattr(self, 'preview_rectangle'):
+                self.preview_rectangle.remove()
+                
+            if self.selection_shape.get() == 'Ellipse':    
+                # Draw the new preview ellipse
+                self.preview_ellipse = matplotlib.patches.Ellipse((center_x, center_y), width, height, edgecolor='white', facecolor='none', linestyle='--')
+                self.fft_filter_ax.add_patch(self.preview_ellipse)
+            elif self.selection_shape.get() == 'Rectangle':
+                # Draw the new preview rectangle
+                self.preview_rectangle = matplotlib.patches.Rectangle((x0, y0), width, height, edgecolor='white', facecolor='none', linestyle='--')
+                self.fft_filter_ax.add_patch(self.preview_rectangle)
+
+            plt.draw()
+
+    def fft_filter_on_release(self, event):
+        #### Created by Nico Reinders ####
+        # Handles mouse release event for FFT mask drawing.
+
+        # Check for valid coordinates before proceeding
+        if self.start_point is None or event.xdata is None or event.ydata is None:
+            return  # Ignore the event if coordinates are not valid
+        if event.button == 1 and self.fft_filter_mode.get() == 'Mask Editor':  # Left mouse button
+            x0, y0 = self.start_point
+            x1, y1 = event.xdata, event.ydata
+            width =  x1 - x0
+            height = y1 - y0
+            center_x = (x0 + x1) / 2
+            center_y = (y0 + y1) / 2
+            
+            if self.selection_shape.get() == 'Ellipse':
+                # Draw preview ellipse
+                ellipse = matplotlib.patches.Ellipse((center_x, center_y), width, height, color='red', fill=True, alpha=0.5)
+                mirrored_ellipse = matplotlib.patches.Ellipse((-center_x, -center_y), -width, -height, color='red', fill=True, alpha=0.5)
+                self.fft_filter_ax.add_patch(ellipse)
+                self.fft_filter_ax.add_patch(mirrored_ellipse)
+                self.shapes = np.append(self.shapes, ellipse)
+                self.shapes = np.append(self.shapes, mirrored_ellipse)           
+                if hasattr(self, 'preview_ellipse'):
+                    self.preview_ellipse.remove()
+                    del self.preview_ellipse
+                
+            elif self.selection_shape.get() == 'Rectangle':
+                # Draw preview rectangle
+                rectangle = matplotlib.patches.Rectangle((x0, y0), width, height, color='red', fill=True, alpha=0.5)
+                mirrored_rectangle = matplotlib.patches.Rectangle((-x0, -y0), -width, -height, color='red', fill=True, alpha=0.5)
+                self.fft_filter_ax.add_patch(rectangle)
+                self.fft_filter_ax.add_patch(mirrored_rectangle)
+                self.shapes = np.append(self.shapes, rectangle)
+                self.shapes = np.append(self.shapes, mirrored_rectangle)  
+                 
+                if hasattr(self, 'preview_rectangle'):
+                    self.preview_rectangle.remove()
+                    del self.preview_rectangle
+                                
+            plt.draw()
+            
+        # Right mouse button to remove shapes
+        
+        elif event.button == 3 and self.fft_filter_mode.get() == 'Mask Editor':  
+            x1, y1 = event.xdata, event.ydata
+            x1, y1 = self.fft_filter_ax.transData.transform((x1, y1))
+
+            if self.shapes.size > 0:
+                for i, shape in enumerate(self.shapes):
+                    patch_path = Path(shape.get_verts())
+
+                    if patch_path.contains_point((x1, y1)):
+                        shape.remove()
+                        self.shapes = np.delete(self.shapes, i)
+                        self.update_fft_filter_plot()
+                        break
+            
+
+    def update_fft_filter_plot(self):
+        #### Created by Nico Reinders ####
+        # Updates the FFT filter plot with current mask preview and corrected data preview.
+
+        if self.fft_filter_mode.get() == 'Mask Editor':    
+            # Mask Editor
+            
+            # Show the mask editor control buttons that are hidden in the preview mode
+            self.fft_mask_checkbox.pack()
+            self.ellipse_button.pack(side=tk.LEFT, padx=5)
+            self.rectangle_button.pack(side=tk.LEFT, padx=5)
+            
+            # Clear the axes and plot the FFT data with the current masks
+            self.fft_filter_ax.clear()
+            self.fft_filter_ax.pcolormesh(self.fft_filter_x, self.fft_filter_y, np.absolute(self.fft_filter_sliced_data), norm=colors.LogNorm(vmin=self.vmin, vmax=self.vmax),
+                                          cmap=self.colormap_combobox.get(), shading='auto', zorder=1, linewidth=0, rasterized=True)
+            for patch in self.shapes:
+                self.fft_filter_ax.add_patch(patch)
+            self.fft_filter_ax.set_xlim(np.min(self.fft_filter_x), np.max(self.fft_filter_x))
+            self.fft_filter_ax.set_ylim(np.min(self.fft_filter_y), np.max(self.fft_filter_y))
+            
+            self.fft_filter_ax.set_xlabel('freq. of ' + self.name_data_x_axis)
+            self.fft_filter_ax.set_ylabel('freq. of ' + self.name_data_y_axis)
+            self.fft_filter_ax.set_title('FFT Amp of ' + self.name_data_z)
+             
+            
+            plt.draw()
+        else:
+            # Filtered Data Preview
+            
+            # Hide the mask editor control buttons
+            self.fft_mask_checkbox.pack_forget()
+            self.rectangle_button.pack_forget()
+            self.ellipse_button.pack_forget()
+            
+            self.fft_filter_sliced_data_cut = self.apply_fft_mask(self.fft_filter_sliced_data)
+            
+            # Show the preview of the filtered data            
+            self.fft_filter_x_preview, self.fft_filter_y_preview, self.fft_filter_sliced_data_preview = two_d_ifft_on_data(self.fft_filter_sliced_data_cut, self.fft_filter_x, self.fft_filter_y, mode='Complex')
+            self.fft_filter_ax.clear()            
+            self.fft_filter_ax.pcolormesh(self.fft_filter_x_preview, self.fft_filter_y_preview, np.abs(self.fft_filter_sliced_data_preview), cmap=self.colormap_combobox.get(), shading='auto', zorder=1, linewidth=0, rasterized=True)
+            self.fft_filter_sliced_data = two_d_fft_on_data(self.sliced_data, self.X, self.Y, mode='Complex')[2]
+            self.fft_filter_ax.set_xlabel(self.name_data_x_axis)
+            self.fft_filter_ax.set_ylabel(self.name_data_y_axis)
+            self.fft_filter_ax.set_title('Preview of FFT-filtered ' + self.name_data_z)
+        
+        self.fft_filter_canvas.draw()
+        
     def apply_data_axis_transform(self):
         self.name_data_x_axis = str(self.x_axis_name_input.get())
         self.name_data_y_axis = str(self.y_axis_name_input.get())
@@ -1147,7 +1431,7 @@ class InteractiveArrayPlotter:
         self.update_pcolormesh(self.vmin, self.vmax)
 
     def apply_2d_fft(self):
-        self.X, self.Y, self.sliced_data = two_d_fft_on_data(self.sliced_data, self.X, self.Y)
+        self.X, self.Y, self.sliced_data = two_d_fft_on_data(self.sliced_data, self.X, self.Y, mode='Amplitude')
         self.name_data_z = 'FFT Amp of ' + self.name_data_z
         self.name_data_x_axis = 'freq. of ' + self.name_data_x_axis
         self.name_data_y_axis = 'freq. of ' + self.name_data_y_axis
@@ -1210,7 +1494,7 @@ class InteractiveArrayPlotter:
         :raises RuntimeError: If the FFT correction process encounters an error.
 
         """
-        #### Modified by Nico R. ####
+        #### Modified by Nico Reinders ####
         self.cuts = get_cuts(self.fft_ax)
         print(self.cuts)
         plt.close(self.fft_fig)
@@ -1230,10 +1514,10 @@ class InteractiveArrayPlotter:
     def deactivate_line_drawing(self):
         if hasattr(self, 'click_cid'):
             self.canvas.mpl_disconnect(self.click_cid)
-            del self.click_cid
+            self.click_cid = None
         if hasattr(self, 'move_cid'):
             self.canvas.mpl_disconnect(self.move_cid)
-            del self.move_cid  # Remove the attribute to clean up
+            self.move_cid = None  # Remove the attribute to clean up
 
     def reset_lines(self):
         self.drawn_lines_list = []
@@ -1381,13 +1665,16 @@ class InteractiveArrayPlotter:
         self.clear_edit_markers()
 
         # Get the line coordinates
+       
         line = self.drawn_lines_list[line_index]
         start_point, end_point = line
 
         # Create markers for start and end points with different colors
         start_marker = self.ax.plot([start_point[0]], [start_point[1]], 'go',
+
                                     markersize=10, alpha=0.7, zorder=10)[0]
         end_marker = self.ax.plot([end_point[0]], [end_point[1]], 'bo',
+
                                   markersize=10, alpha=0.7, zorder=10)[0]
 
         # Store the markers
@@ -1535,6 +1822,8 @@ class InteractiveArrayPlotter:
 
         # Remove the line from our list
         self.drawn_lines_list.pop(selected_index)
+
+       
 
         # Update the listbox and redraw
         self.update_lines_listbox()
