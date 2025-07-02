@@ -30,7 +30,10 @@ def data_menu_bar(root, hdf5data):
     menubar.add_cascade(label='Data', menu=data)
     data.add_command(label='Save Data as Numpy Array', command=lambda: create_data_array(hdf5data))
     data.add_command(label='Save Traces as Numpy Arrays', command=lambda: create_trace_array(hdf5data))
+    data.add_command(label='Add traces from HDF5 File', command=lambda: add_traces_window(hdf5data)) # Nico Reinders: to add traces to current file from another HDF5 file
+    
     data.add_command(label='Calculate Histograms', command=lambda: create_hist_data(hdf5data))
+    
 
     data.add_separator()
     plotting = tk.Menu(menubar, tearoff=0)
@@ -60,6 +63,70 @@ def get_unique_filename(filepath):
         counter += 1
 
     return new_filepath
+
+
+
+def add_traces_window(hdf5Data):
+    pth = filedialog.askopenfilename(filetypes=[("HDF5 files", "*.hdf5")])
+    traces_hdf5Data = HDF5Data(wdir=pth)
+    traces_hdf5Data.set_path(pth, 'r')
+    
+    traces_selection_window = tk.Toplevel()
+    traces_selection_window.title('Add Traces from HDF5 File')
+    # Add a frame for the group name entry
+    group_frame = tk.Frame(traces_selection_window)
+    group_frame.pack(pady=5)
+    tk.Label(group_frame, text="Destination group name:").pack(side=tk.LEFT)
+    group_name_var = tk.StringVar(value='Traces')
+    group_name_entry = tk.Entry(group_frame, textvariable=group_name_var, width=30)
+    group_name_entry.pack(side=tk.LEFT, padx=5)
+
+    traces_tree = display_hdf5_file(traces_selection_window, traces_hdf5Data)
+
+    def copy_selected_dataset():
+        traces_hdf5Data.set_data()
+        # Robust selection check
+        selected_items = traces_tree.selection()
+        if not selected_items:
+            messagebox.showwarning("No Selection", "Please select a dataset or group to copy.")
+            return
+        selected_item = selected_items[0]
+        values_above = get_values_above_clicked_node(selected_item, traces_tree)
+        file_dir_sep = '/'
+        file_dir = file_dir_sep.join(values_above)
+        dest_group = group_name_var.get().strip() or 'Traces'
+        print(f"Copying from: {file_dir} to group: {dest_group}")
+        # Always use string keys for h5py access
+        try:
+            h5obj = traces_hdf5Data.file[file_dir]
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not access {file_dir}: {e}")
+            return
+        
+        if isinstance(h5obj, h5py.Group):
+            trace_names = [str(name) for name in h5obj.keys()]
+            traces = [h5obj[str(trace)] for trace in trace_names]
+            print(f"Trace names: {trace_names}")
+            print(f"Traces: {traces}")
+            # Overwrite group if it exists
+            with h5py.File(hdf5Data.readpath, 'r+') as dest_file:
+                if dest_group in dest_file:
+                    # Delete the existing group
+                    del dest_file[dest_group]
+            hdf5Data.add_group_and_datasets(dest_group, trace_names, traces)
+        elif isinstance(h5obj, h5py.Dataset):
+            trace_name = values_above[-1]
+            hdf5Data.add_group_and_datasets(dest_group, [trace_name], [h5obj])
+        else:
+            messagebox.showwarning("Invalid Selection", "Selected item is neither a group nor a dataset.")
+            return
+
+    # Add a button to trigger the copy
+    copy_button = tk.Button(traces_selection_window, text="Copy Selected Dataset(s)", command=copy_selected_dataset)
+    copy_button.pack(pady=10)
+    
+        
+
 # Hannah Vogel
 # Modified by H.D to additionly handle whole folders instead of single files
 def remove_selected_options_window(root, hdf5Data):
@@ -366,7 +433,13 @@ def plot_array_with_trace_data(hdf5Data, root):
 
 
 ####
-
+def get_values_above_clicked_node(item, tree):
+    values = []
+    while item:
+        value = tree.item(item, "text")
+        values.insert(0, value)
+        item = tree.parent(item)
+    return values
 
 def display_hdf5_file(root, hdf5Data):
 
@@ -407,13 +480,7 @@ def display_hdf5_file(root, hdf5Data):
         hdf5Data.reset()
         hdf5Data = None
 
-    def get_values_above_clicked_node(item):
-        values = []
-        while item:
-            value = tree.item(item, "text")
-            values.insert(0, value)
-            item = tree.parent(item)
-        return values
+   
 
     def open_selection(event):
         item = tree.selection()[0]
@@ -424,7 +491,7 @@ def display_hdf5_file(root, hdf5Data):
     def on_single_click(event):
         hdf5Data.set_data()
         item = tree.selection()[0]
-        values_above = get_values_above_clicked_node(item)
+        values_above = get_values_above_clicked_node(item, tree)
         file_dir_sep ='/'
         file_dir = file_dir_sep.join(values_above)
         hdf5Data.set_current_h5dir(file_dir)
@@ -432,13 +499,13 @@ def display_hdf5_file(root, hdf5Data):
 
     def on_right_click(event):
         item = tree.selection()[0]
-        values_above = get_values_above_clicked_node(item)
+        values_above = get_values_above_clicked_node(item, tree)
         print(f"right-clicked on item: {values_above}")
 
     def on_double_right_click(event):
         hdf5Data.set_data()
         parent_item = tree.selection()[0]
-        values_above = get_values_above_clicked_node(parent_item)
+        values_above = get_values_above_clicked_node(parent_item, tree)
         file_dir_sep ='/'
         file_dir = file_dir_sep.join(values_above)
         with hdf5Data.file as file:
@@ -448,7 +515,7 @@ def display_hdf5_file(root, hdf5Data):
 
     def on_double_click(event):
         item = tree.selection()[0]
-        values_above = get_values_above_clicked_node(item)
+        values_above = get_values_above_clicked_node(item, tree)
         file_dir_sep ='/'
         file_dir = file_dir_sep.join(values_above)
         print(f"Double-clicked on item: {file_dir}")
