@@ -88,26 +88,23 @@ def add_traces_window(hdf5Data):
         # Robust selection check
         selected_items = traces_tree.selection()
         if not selected_items:
-            messagebox.showwarning("No Selection", "Please select a dataset or group to copy.")
+            print("No Selection", "Please select a dataset or group to copy.")
             return
         selected_item = selected_items[0]
         values_above = get_values_above_clicked_node(selected_item, traces_tree)
         file_dir_sep = '/'
         file_dir = file_dir_sep.join(values_above)
         dest_group = group_name_var.get().strip() or 'Traces'
-        print(f"Copying from: {file_dir} to group: {dest_group}")
         # Always use string keys for h5py access
         try:
             h5obj = traces_hdf5Data.file[file_dir]
         except Exception as e:
-            messagebox.showerror("Error", f"Could not access {file_dir}: {e}")
+            print("Error", f"Could not access {file_dir}: {e}")
             return
         
         if isinstance(h5obj, h5py.Group):
             trace_names = [str(name) for name in h5obj.keys()]
             traces = [h5obj[str(trace)] for trace in trace_names]
-            print(f"Trace names: {trace_names}")
-            print(f"Traces: {traces}")
             # Overwrite group if it exists
             with h5py.File(hdf5Data.readpath, 'r+') as dest_file:
                 if dest_group in dest_file:
@@ -115,10 +112,11 @@ def add_traces_window(hdf5Data):
                     del dest_file[dest_group]
             hdf5Data.add_group_and_datasets(dest_group, trace_names, traces)
         elif isinstance(h5obj, h5py.Dataset):
+            
             trace_name = values_above[-1]
             hdf5Data.add_group_and_datasets(dest_group, [trace_name], [h5obj])
         else:
-            messagebox.showwarning("Invalid Selection", "Selected item is neither a group nor a dataset.")
+            print("Invalid Selection", "Selected item is neither a group nor a dataset.")
             return
 
     # Add a button to trigger the copy
