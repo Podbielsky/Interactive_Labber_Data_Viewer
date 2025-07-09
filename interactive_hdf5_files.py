@@ -67,13 +67,22 @@ def get_unique_filename(filepath):
 
 
 def add_traces_window(hdf5Data):
+    """
+    Added by Nico Reinders
+    Opens a window to select a file to copy groups or datasets from
+    Then shows the content of the file in a treeview
+    Allows the user to select a group or dataset and copy it to the current hdf5 file
+    """
+    
     pth = filedialog.askopenfilename(filetypes=[("HDF5 files", "*.hdf5")])
     traces_hdf5Data = HDF5Data(wdir=pth)
     traces_hdf5Data.set_path(pth, 'r')
     
+    # open treeview window
     traces_selection_window = tk.Toplevel()
     traces_selection_window.title('Add Traces from HDF5 File')
-    # Add a frame for the group name entry
+        
+    #add an entry for the group name in the destination file
     group_frame = tk.Frame(traces_selection_window)
     group_frame.pack(pady=5)
     tk.Label(group_frame, text="Destination group name:").pack(side=tk.LEFT)
@@ -81,12 +90,17 @@ def add_traces_window(hdf5Data):
     group_name_entry = tk.Entry(group_frame, textvariable=group_name_var, width=30)
     group_name_entry.pack(side=tk.LEFT, padx=5)
 
+    # show treeview of the source file
     traces_tree = display_hdf5_file(traces_selection_window, traces_hdf5Data)
 
     def copy_selected_dataset():
+        """
+        Copies the selected dataset or group from the source file traces_hdf5Data to the current hdf5 file.
+        """
+        
         traces_hdf5Data.set_data()
-        # Robust selection check
         selected_items = traces_tree.selection()
+        
         if not selected_items:
             print("No Selection", "Please select a dataset or group to copy.")
             return
