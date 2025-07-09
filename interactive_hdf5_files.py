@@ -119,16 +119,35 @@ def add_traces_window(hdf5Data):
         if isinstance(h5obj, h5py.Group):
             trace_names = [str(name) for name in h5obj.keys()]
             traces = [h5obj[str(trace)] for trace in trace_names]
-            # Overwrite group if it exists
+            # Add datasets to group if it exists, else create group
             with h5py.File(hdf5Data.readpath, 'r+') as dest_file:
                 if dest_group in dest_file:
-                    # Delete the existing group
-                    del dest_file[dest_group]
-            hdf5Data.add_group_and_datasets(dest_group, trace_names, traces)
+                    group = dest_file[dest_group]
+                else:
+                    group = dest_file.create_group(dest_group)
+                for trace_name, trace in zip(trace_names, traces):
+                    if trace_name in group:
+                        del group[trace_name]
+                    group.create_dataset(trace_name, data=trace[()])
+            hdf5Data.set_data()
         elif isinstance(h5obj, h5py.Dataset):
-            
             trace_name = values_above[-1]
-            hdf5Data.add_group_and_datasets(dest_group, [trace_name], [h5obj])
+            with h5py.File(hdf5Data.readpath, 'r+') as dest_file:
+                if dest_group in dest_file:
+                    # enable track_order (specific order is required by HDF5data.set_traces)
+                    old_group = dest_file[dest_group]
+                    new_group = dest_file.create_group('dest_group_tmp', track_order=True)
+                    # Fast copy: copy the entire group at once
+                    dest_file.copy(old_group, new_group)
+                    del dest_file[old_group.name]
+                    dest_file.move('dest_group_tmp', dest_group)
+                    group = dest_file[dest_group]  # assign group after move
+                else:
+                    group = dest_file.create_group(dest_group)
+                if trace_name in group:
+                    del group[trace_name]
+                group.create_dataset(trace_name, data=h5obj[()])
+            hdf5Data.set_data()
         else:
             print("Invalid Selection", "Selected item is neither a group nor a dataset.")
             return
