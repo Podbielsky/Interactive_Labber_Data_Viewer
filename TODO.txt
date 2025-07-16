@@ -22,4 +22,3 @@ TODO list for next versions:
 
 - BUG Installation does not work on certain Windows desktops (no clue why, probably to not activating the venv and
  using the default system PATH)
-

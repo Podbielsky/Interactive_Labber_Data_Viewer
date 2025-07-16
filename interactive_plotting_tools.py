@@ -20,7 +20,7 @@ from scipy import constants as co
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, two_d_ifft_on_data, evaluate_poly_background_2d,
                                           correct_median_diff, correct_mean_of_lines, gradient_5p_stencil,
                                           subtract_trace_average, cut_data_range, extract_linecut,
-                                          skewed_gaussian_func_shape, beta_func_shape)
+                                          skewed_gaussian_func_shape, beta_func_shape, trace_wise_min_max_scaling)
 from gamma_map import (get_t_rates, get_fourier, fft_correction_select, fft_correction_apply, get_cuts)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap
 neon_cmap = make_neon_cyclic_colormap()
@@ -189,6 +189,13 @@ class InteractiveArrayPlotter:
         self.roi_mode = False
         self.roi_corners = []  # Store corners of the ROI as [(x1, y1), (x2, y2)]
         self.current_roi_patch = None  # Current ROI rectangle
+
+        # Lever-Arm attributes
+        self.lever_arm_mode = 'Double'
+        self.lever_arm_points_list = []
+        self.sd_bias = None
+        self.lever_arm_coefficients = None
+
 
         # Create Menu Bar
         self.menubar = tk.Menu(self.root)
@@ -941,6 +948,7 @@ class InteractiveArrayPlotter:
 
     def open_data_axis_transform(self):
         self.data_axis_transform_window = tk.Toplevel(self.root)
+        self.use_trace_wise_min_max_scaling_var = tk.BooleanVar(value=False)
         self.data_axis_transform_window.title("Axis Scaling and Renaming")
         self.data_axis_transform_window.geometry("400x200")
 
@@ -970,6 +978,13 @@ class InteractiveArrayPlotter:
         self.z_axis_scale_input = tk.Entry(self.data_axis_transform_scaling_frame)
         self.z_axis_scale_input.pack()
         self.z_axis_scale_input.insert(0, '1.0')
+
+        self.use_trace_wise_min_max_scaling_check = tk.Checkbutton(
+            self.data_axis_transform_window,
+            text="Trace Wise min-max scaling",
+            variable=self.use_trace_wise_min_max_scaling_var
+        )
+        self.use_trace_wise_min_max_scaling_check.pack(side=tk.BOTTOM, pady=2)
 
         submit_button = tk.Button(self.data_axis_transform_window, text="Apply", command=self.apply_data_axis_transform)
         submit_button.pack(side=tk.BOTTOM)
@@ -1025,7 +1040,7 @@ class InteractiveArrayPlotter:
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=1)
 
         # Create a Matplotlib figure and axis for the FFT filter
-        self.fft_filter_fig, self.fft_filter_ax = plt.subplots(1, 1, figsize=(8, 8))
+        self.fft_filter_fig, self.fft_filter_ax = plt.subplots(1, 1, figsize=(6, 6))
         
         self.fft_filter_canvas = FigureCanvasTkAgg(self.fft_filter_fig, master=left_frame)
         self.fft_filter_canvas.draw_idle()
@@ -1100,8 +1115,7 @@ class InteractiveArrayPlotter:
         fft_filter_sliced_data_cut[:-1, :-1] *= combined_mask
 
         return fft_filter_sliced_data_cut
-    
-    
+
     def apply_fft_filter(self):
         #### Created by Nico Reinders ####
         # Finally applies the combined FFT mask and performs the inverse FFT.
@@ -1239,7 +1253,6 @@ class InteractiveArrayPlotter:
                         self.shapes = np.delete(self.shapes, i)
                         self.update_fft_filter_plot()
                         break
-            
 
     def update_fft_filter_plot(self):
         #### Created by Nico Reinders ####
@@ -1300,6 +1313,10 @@ class InteractiveArrayPlotter:
 
         self.xlim = [np.min(self.X), np.max(self.X)]
         self.ylim = [np.min(self.Y), np.max(self.Y)]
+
+        if self.use_trace_wise_min_max_scaling_var.get():
+            self.sliced_data = trace_wise_min_max_scaling(self.sliced_data)
+
         if self.auto_scale_var.get():
             self.vmin = np.min(self.sliced_data)
             self.vmax = np.max(self.sliced_data)
