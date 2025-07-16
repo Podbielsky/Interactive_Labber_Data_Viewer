@@ -133,19 +133,17 @@ def add_traces_window(hdf5Data):
         elif isinstance(h5obj, h5py.Dataset):
             trace_name = values_above[-1]
             with h5py.File(hdf5Data.readpath, 'r+') as dest_file:
+                # Create or get the destination group (with track_order=True)
                 if dest_group in dest_file:
-                    # enable track_order (specific order is required by HDF5data.set_traces)
-                    old_group = dest_file[dest_group]
-                    new_group = dest_file.create_group('dest_group_tmp', track_order=True)
-                    # Fast copy: copy the entire group at once
-                    dest_file.copy(old_group, new_group)
-                    del dest_file[old_group.name]
-                    dest_file.move('dest_group_tmp', dest_group)
-                    group = dest_file[dest_group]  # assign group after move
+                    group = dest_file[dest_group]
                 else:
-                    group = dest_file.create_group(dest_group)
+                    group = dest_file.create_group(dest_group, track_order=True)
+                
+                # If dataset already exists, delete it
                 if trace_name in group:
                     del group[trace_name]
+                
+                # Copy dataset directly
                 group.create_dataset(trace_name, data=h5obj[()])
             hdf5Data.set_data()
         else:
