@@ -610,8 +610,8 @@ def cut_data_range(x_grid, y_grid, z_data, x_range, y_range):
 
     return x_grid_cut, y_grid_cut, z_data_cut
 
-
-
+def trace_wise_min_max_scaling(img):
+    return (img - np.min(img, axis=-1, keepdims=True)) / (np.max(img, axis=-1, keepdims=True) - np.min(img, axis=-1, keepdims=True))
 ### from down here: work in progress (some parts are already refactored into gamma maps)
 
 def gaussian(x, a, mu, sigma):
