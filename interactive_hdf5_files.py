@@ -25,9 +25,10 @@ def data_menu_bar(root, hdf5data):
     file.add_command(label='Save File as', command=lambda: save_data_as(hdf5data))
     file.add_command(label='Create a HDF5 File from Numpy Files', command=lambda : create_hdf5_files_from_npy(root))
     file.add_command(label='Remove Selected Datasets', command=lambda: remove_selected_options_window(root, hdf5data)) #Hannah Vogel: to select datasets to be removed
+    file.add_separator()
     file.add_command(label='Add traces from HDF5 File', command=lambda: add_traces_window(hdf5data)) # Nico Reinders: to add traces to current file from another HDF5 file
     file.add_command(label='Generate traces from dataset', command=lambda: transform_traces_window(hdf5data)) # Nico Reinders: create a file with a 'Traces' group that is compatible with the interactive data viewer 
-    file.add_separator()
+    
     data = tk.Menu(menubar, tearoff=0)
     menubar.add_cascade(label='Data', menu=data)
     data.add_command(label='Save Data as Numpy Array', command=lambda: create_data_array(hdf5data))
@@ -66,39 +67,113 @@ def get_unique_filename(filepath):
 
     return new_filepath
 
+
+def open_reshape_confirmation_window(hdf5Data, selected_dataset):
+    """
+    Opens a confirmation window to reshape the selected dataset.
+    """
+    
+    confirm_window = tk.Toplevel()
+    confirm_window.title("Confirm Reshape")
+    
+    # Show the selected dataset name
+    tk.Label(confirm_window, text=f"Selected Dataset: {selected_dataset}").pack(pady=10)
+    
+    # Confirmation button
+    def confirm_reshape():
+        confirm_window.destroy()
+        hdf5Data.reshape_dataset(selected_dataset)
+    
+    confirm_button = tk.Button(confirm_window, text="Confirm Reshape")
+    confirm_button.pack(pady=10)
+    
+    # Cancel button
+    cancel_button = tk.Button(confirm_window, text="Cancel", command=confirm_window.destroy)
+    cancel_button.pack(pady=10)
+
+def close_transform_window(transform_options, reshape_hdf5Data, dataset_tree):
+    '''
+    closes the dataset selection window and opens a second window to select another dataset as axis.
+    opens the final settings window to confirm the selection and reshape the dataset.
+    '''
+    print("Closing transform options window and proceeding with dataset selection.")
+    selected_items = dataset_tree.selection()
+    selected_item = selected_items[0]
+    values_above = get_values_above_clicked_node(selected_item, dataset_tree)
+    file_dir_sep = '/'
+    file_dir = file_dir_sep.join(values_above)
+    try:
+        h5obj = reshape_hdf5Data.file[file_dir]
+    except Exception as e:
+        print("Error", f"Could not access {file_dir}: {e}")
+        return
+
+    print('h5obj: ', {h5obj})
+    if check_reshape_requirements(h5obj): # TODO: check if the selected item is a single dataset with 3 dimensions
+        transform_options.destroy()
+        selected_dataset = h5obj
+        print("Selected item is valid for reshaping.")
+    else:
+        print("No or invalid selection", "Please select a valid dataset to reshape.")
+        return
+        
+    
+    
+    
+    
+    
+    transform_options.destroy()
+        
+    # Open a second window for selecting another dataset as axis (optional)
+    second_window = tk.Toplevel()
+    second_window.title("Select Another Dataset as Axis (Optional)")
+
+    # Show a treeview of the same HDF5 file in the new window
+    second_tree = display_hdf5_file(second_window, reshape_hdf5Data)
+
+    # Optionally, add a confirm button for the second selection
+    confirm_second_button = tk.Button(second_window, text="Confirm Selection", 
+                                    command=lambda: open_reshape_confirmation_window(reshape_hdf5Data, selected_dataset))
+    confirm_second_button.pack(pady=10)
+
+
 def transform_traces_window(hdf5Data):
+    '''
+    Opens a window to select a dataset to reshape into traces.
+    Button runs the close_transform_window function to close the window and make axis data set selection possible.
+    '''
+    
+    pth = filedialog.askopenfilename(filetypes=[("HDF5 files", "*.hdf5")])
+    reshape_hdf5Data = HDF5Data(wdir=pth)
+    reshape_hdf5Data.set_path(pth, 'r')
+    
     transform_options = tk.Toplevel()
     transform_options.title("Generate Traces file from Dataset")    
 
-    dataset_tree = display_hdf5_file(transform_options, hdf5Data)
-    confirm_button = tk.Button(transform_options, text="Confirm Selection", command=close_transform_window)
+    dataset_tree = display_hdf5_file(transform_options, reshape_hdf5Data)
+    
+    
+    
+    confirm_button = tk.Button(transform_options, text="Confirm Selection", 
+                              command=lambda: close_transform_window(transform_options, reshape_hdf5Data, dataset_tree))
     confirm_button.pack(pady=10)
     
-    def close_transform_window():
-        
-        selected_items = dataset_tree.selection()
-        
-        if not selected_items:
-            print("No Selection", "Please select a dataset or group to copy.")
-            transform_traces_window(hdf5Data)
-        selected_item = selected_items[0]
-        print(f"Selected item: {selected_item}")
-        
-        transform_options.destroy()
-        # Open a second window for selecting another dataset
-        second_window = tk.Toplevel(transform_options)
-        second_window.title("Select Another Dataset")
-
-        # Show a treeview of the same HDF5 file in the new window
-        second_tree = display_hdf5_file(second_window, hdf5Data)
-
-        # Optionally, add a confirm button for the second selection
-        confirm_second_button = tk.Button(second_window, text="Confirm Selection", command=second_window.destroy)
-        confirm_second_button.pack(pady=10)
-        
     
-            
-
+    
+def check_reshape_requirements(selected_item):
+    if selected_item is None:
+        print("No item selected.")
+        return False
+    elif not isinstance(selected_item, h5py.Dataset):
+        print("Selected item is not a dataset.")
+        return False        
+    elif len(selected_item.shape) != 3:
+        print("Selected dataset does not have 3 dimensions.")
+        return False
+    else: 
+        return True
+    
+    
 def add_traces_window(hdf5Data):
     """
     Added by Nico Reinders
