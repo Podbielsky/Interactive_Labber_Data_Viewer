@@ -68,7 +68,8 @@ def get_unique_filename(filepath):
     return new_filepath
 
 
-def apply_reshape(selected_dataset, selected_axis_dataset):
+def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
+    
     selected_dataset = np.array(selected_dataset[:])
     if selected_axis_dataset is None:
         t0, dt = 0, 1
@@ -81,7 +82,6 @@ def apply_reshape(selected_dataset, selected_axis_dataset):
         if arr.ndim == 1 and arr.size >= 2:
             t0 = arr[0]
             diffs = np.diff(arr)
-            # choose how you want dt; min(abs(diff)) is conservative
             dt = np.min(np.abs(diffs))
         else:
             t0, dt = 0, 1
@@ -94,7 +94,7 @@ def apply_reshape(selected_dataset, selected_axis_dataset):
     # Keep a copy of the original spectra for mean calculation
     spectra_original = selected_dataset.copy()
 
-    selected_dataset = np.moveaxis(selected_dataset, 2, 0)  # Move the last axis to the first position
+    selected_dataset = np.moveaxis(selected_dataset, dimension_index, 0)  # Move the selected axis to the first position
     selected_dataset = np.reshape(selected_dataset, (selected_dataset.shape[0], 1, -1))
     shape = selected_dataset.shape
     print(f"Shape of spectra: {shape}") 
@@ -155,19 +155,41 @@ def open_reshape_confirmation_window(reshape_hdf5Data, selected_dataset, second_
     
     confirm_window = tk.Toplevel()
     confirm_window.title("Confirm Reshape")
-    
-    # Show the selected dataset name
-    tk.Label(confirm_window, text=f"Selected Dataset: {selected_dataset}").pack(pady=10)
-    tk.Label(confirm_window, text=f"Selected Axis Dataset: {selected_axis_dataset}").pack(pady=10)
 
-    
-    confirm_button = tk.Button(confirm_window, text="Confirm Reshape", 
-                              command=lambda: (apply_reshape(selected_dataset, selected_axis_dataset), confirm_window.destroy()))
-    confirm_button.pack(pady=10)
-    
-    # Cancel button
-    cancel_button = tk.Button(confirm_window, text="Cancel", command=confirm_window.destroy)
-    cancel_button.pack(pady=10)
+    # Frame for dataset labels
+    label_frame = tk.Frame(confirm_window)
+    label_frame.pack(anchor='w', pady=5, padx=5, fill='x')
+
+    tk.Label(label_frame, text=f"Selected Dataset: {selected_dataset}").pack(anchor='w')
+    tk.Label(label_frame, text=f"Selected Axis Dataset: {selected_axis_dataset}").pack(anchor='w')
+
+    # Frame for spinbox + label
+    spin_frame = tk.Frame(confirm_window)
+    spin_frame.pack(anchor='w', pady=5, padx=5, fill='x')
+
+    tk.Label(spin_frame, text="Index of dimension in selected dataset to be used as x axis:").pack(side='left', padx=(0, 5))
+
+    if selected_axis_dataset is not None and np.array(selected_axis_dataset[:]).ndim == 1:
+        dim = np.shape(selected_dataset).index(len(selected_axis_dataset))
+    else:
+        dim = 0
+    dimension_index = tk.IntVar(value=dim)
+
+    tk.Spinbox(spin_frame, from_=0, to=2, increment=1, width=5, textvariable=dimension_index).pack(side='left')
+
+    # Buttons frame
+    button_frame = tk.Frame(confirm_window)
+    button_frame.pack(pady=10)
+
+    confirm_button = tk.Button(
+        button_frame,
+        text="Confirm Reshape",
+        command=lambda: (apply_reshape(selected_dataset, selected_axis_dataset, int(dimension_index.get())), confirm_window.destroy())
+    )
+    confirm_button.pack(side='left', padx=5)
+
+    cancel_button = tk.Button(button_frame, text="Cancel", command=confirm_window.destroy)
+    cancel_button.pack(side='left', padx=5)
 
 def close_transform_window(transform_options, reshape_hdf5Data, dataset_tree):
     '''
