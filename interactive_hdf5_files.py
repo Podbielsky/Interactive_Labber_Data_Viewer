@@ -275,19 +275,96 @@ def transform_traces_window(hdf5Data):
     '''
     
     pth = filedialog.askopenfilename(filetypes=[("HDF5 files", "*.hdf5")])
+    if not pth:
+        print("No file selected. Operation cancelled.")
+        return
+
     reshape_hdf5Data = HDF5Data(wdir=pth)
     reshape_hdf5Data.set_path(pth, 'r')
-    
-    transform_options = tk.Toplevel()
-    transform_options.title("Generate Traces file from Dataset")    
+    # Open file and keep it open for the window lifetime
+    reshape_hdf5Data.file = h5py.File(pth, 'r')
 
-    dataset_tree = display_hdf5_file(transform_options, reshape_hdf5Data)
+    def on_var_change(*args):
+        selected_dataset = dataset_map[dataset_selection.get()] if dataset_selection.get() in dataset_map else None
+        selected_axis_dataset = axis_map[axis_selection.get()] if axis_selection.get() in axis_map else None
+        dataset_label_text.set(f"Selected Dataset: {selected_dataset if selected_dataset is not None else ''}")
+        axis_label_text.set(f"Selected Axis Dataset: {selected_axis_dataset if selected_axis_dataset is not None else ''}")
+            
+    transform_options = tk.Toplevel()
+
+    def on_close_transform_options():
+        try:
+            if reshape_hdf5Data.file:
+                reshape_hdf5Data.file.close()
+        except Exception:
+            pass
+        transform_options.destroy()
+    transform_options.protocol("WM_DELETE_WINDOW", on_close_transform_options)
+
+    # Frame for dataset selection
+    dataset_frame = tk.Frame(transform_options)
+    dataset_frame.pack(anchor='n', pady=5, padx=5, fill='x')
+
+    # Frame for dataset labels
+    label_frame = tk.Frame(transform_options)
+    label_frame.pack(anchor='w', pady=5, padx=5, fill='x')
+
+    dataset_map = {}
+    axis_map = {}
+    file = reshape_hdf5Data.file
+    def visitor(name, obj):
+        if isinstance(obj, h5py.Dataset):
+            dataset_map[name] = obj  # name is the full HDF5 path
+    file.visititems(visitor)
+
+    def visitor_axis(name, obj):
+        if isinstance(obj, h5py.Dataset):
+            axis_map[name] = obj  # name is the full HDF5 path
+    file.visititems(visitor_axis)
+
+    datasets_names = list(dataset_map.keys())
+    axis_names = list(axis_map.keys())
+
+    dataset_selection = tk.StringVar(value=datasets_names[0] if datasets_names else "")  # default selection
+    database_combo = ttk.Combobox(dataset_frame, textvariable=dataset_selection, values=datasets_names, state="readonly")
+    database_combo.pack(padx=10, pady=10)
+
+    axis_selection = tk.StringVar(value=axis_names[0] if axis_names else "")  # default selection
+    axis_combo = ttk.Combobox(dataset_frame, textvariable=axis_selection, values=axis_names, state="readonly")
+    axis_combo.pack(padx=10, pady=10)
+
+    dataset_selection.trace_add("write", on_var_change)
+    axis_selection.trace_add("write", on_var_change)
+
+    dataset_label_text = tk.StringVar(value=f"Selected Dataset: {dataset_map[dataset_selection.get()] if dataset_selection.get() in dataset_map else ''}")
+    axis_label_text = tk.StringVar(value=f"Selected Axis Dataset: {axis_map[axis_selection.get()] if axis_selection.get() in axis_map else ''}")
     
+    tk.Label(label_frame, textvariable=dataset_label_text).pack(anchor='w')
+    tk.Label(label_frame, textvariable=axis_label_text).pack(anchor='w')
+
+    # Frame for spinbox + label
+    spin_frame = tk.Frame(transform_options)
+    spin_frame.pack(anchor='w', pady=5, padx=5, fill='x')
+
+    tk.Label(spin_frame, text="Index of dimension in selected dataset to be used as x axis:").pack(side='left', padx=(0, 5))
+
+    dimension_index = tk.IntVar(value=0)  # Default to 0
+    tk.Spinbox(spin_frame, from_=0, to=2, increment=1, width=5, textvariable=dimension_index).pack(side='left')
+
+    # Buttons frame
+    button_frame = tk.Frame(transform_options)
+    button_frame.pack(pady=10)
+
+    confirm_button = tk.Button(
+        button_frame,
+        text="Confirm Reshape",
+        command=lambda: (apply_reshape(dataset_map[dataset_selection.get()], axis_map[axis_selection.get()], int(dimension_index.get())), transform_options.destroy())
+    )
+    confirm_button.pack(side='left', padx=5)
+
+    cancel_button = tk.Button(button_frame, text="Cancel", command=transform_options.destroy)
+    cancel_button.pack(side='left', padx=5)
     
-    
-    confirm_button = tk.Button(transform_options, text="Confirm Selection", 
-                              command=lambda: close_transform_window(transform_options, reshape_hdf5Data, dataset_tree))
-    confirm_button.pack(pady=10)
     
     
     
