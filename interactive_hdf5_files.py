@@ -68,23 +68,101 @@ def get_unique_filename(filepath):
     return new_filepath
 
 
-def open_reshape_confirmation_window(hdf5Data, selected_dataset):
+def apply_reshape(selected_dataset, selected_axis_dataset):
+    selected_dataset = np.array(selected_dataset[:])
+    if selected_axis_dataset is None:
+        t0, dt = 0, 1
+        print("No axis dataset selected, using default t0=0 and dt=1.")
+    else:
+        # materialize to a NumPy array (works for h5py.Dataset and ndarrays)
+        arr = np.asarray(selected_axis_dataset[()]) if hasattr(selected_axis_dataset, "__getitem__") else np.asarray(selected_axis_dataset)
+        arr = np.ravel(arr)  # flatten
+
+        if arr.ndim == 1 and arr.size >= 2:
+            t0 = arr[0]
+            diffs = np.diff(arr)
+            # choose how you want dt; min(abs(diff)) is conservative
+            dt = np.min(np.abs(diffs))
+        else:
+            t0, dt = 0, 1
+            print("Warning: Selected axis dataset is not 1D or too short, using default t0=0 and dt=1.")
+
+    
+    shape_original = selected_dataset.shape
+    print(f"Original Shape of spectra: {shape_original}") 
+    
+    # Keep a copy of the original spectra for mean calculation
+    spectra_original = selected_dataset.copy()
+
+    selected_dataset = np.moveaxis(selected_dataset, 2, 0)  # Move the last axis to the first position
+    selected_dataset = np.reshape(selected_dataset, (selected_dataset.shape[0], 1, -1))
+    shape = selected_dataset.shape
+    print(f"Shape of spectra: {shape}") 
+        
+    data_data = np.zeros((shape_original[0], 3, shape_original[1]))
+    data_data[:, 0, :] = np.arange(shape_original[0])[:, None]
+    data_data[:, 1, :] = np.arange(shape_original[1])[None, :]
+    data_data[:, 2, :] = np.mean(spectra_original, axis=2)  # Calculate mean along the last axis of original data
+
+    print(f"Shape of data_data: {data_data.shape}")
+
+    output_path = filedialog.asksaveasfilename(defaultextension=".hdf5", filetypes=[("HDF5 files", "*.hdf5")], title="Save HDF5 file as...")
+
+    if output_path:
+        print("Saving traces file to:", output_path)
+    else:
+        print("User cancelled")
+
+    with h5py.File(output_path, 'w') as out_file:
+        traces_grp = out_file.create_group('Traces', track_order=True)
+        traces_grp.create_dataset('Data', data=selected_dataset)
+        traces_grp.create_dataset('Data_N', data=[shape[0]])
+        traces_grp.create_dataset('Alazar Slytherin - Ch1 - Data_t0dt', data=[[t0, dt]])
+
+        data_grp = out_file.create_group('Data')
+        data_grp.attrs['Step dimensions'] = [shape_original[0], shape_original[1]]
+        data_grp.attrs['Step index'] = [0, 1]
+        data_grp.create_dataset('Data', data=data_data)
+        data_grp.create_dataset('Channel names', data=[(b'Axis 1', b''), (b'Axis 2', b''), (b'Channel 1', b'')])
+        out_file.create_dataset('Log list', data=[(b'Channel 1', b'')])
+
+        out_file.close()
+    
+    
+    
+
+def open_reshape_confirmation_window(reshape_hdf5Data, selected_dataset, second_tree):
     """
     Opens a confirmation window to reshape the selected dataset.
     """
+    
+    selected_items = second_tree.selection()
+    if selected_items:    
+        selected_item = selected_items[0]
+        values_above = get_values_above_clicked_node(selected_item, second_tree)
+        file_dir_sep = '/'
+        file_dir = file_dir_sep.join(values_above)
+        try:
+            h5obj = reshape_hdf5Data.file[file_dir]
+        except Exception as e:
+            print("Error", f"Could not access {file_dir}: {e}")
+            return
+
+        selected_axis_dataset = h5obj # TODO: check if the selected item is a single dataset with 1 dimension
+    
+    else: 
+        selected_axis_dataset = None
     
     confirm_window = tk.Toplevel()
     confirm_window.title("Confirm Reshape")
     
     # Show the selected dataset name
     tk.Label(confirm_window, text=f"Selected Dataset: {selected_dataset}").pack(pady=10)
+    tk.Label(confirm_window, text=f"Selected Axis Dataset: {selected_axis_dataset}").pack(pady=10)
+
     
-    # Confirmation button
-    def confirm_reshape():
-        confirm_window.destroy()
-        hdf5Data.reshape_dataset(selected_dataset)
-    
-    confirm_button = tk.Button(confirm_window, text="Confirm Reshape")
+    confirm_button = tk.Button(confirm_window, text="Confirm Reshape", 
+                              command=lambda: (apply_reshape(selected_dataset, selected_axis_dataset), confirm_window.destroy()))
     confirm_button.pack(pady=10)
     
     # Cancel button
@@ -116,12 +194,7 @@ def close_transform_window(transform_options, reshape_hdf5Data, dataset_tree):
     else:
         print("No or invalid selection", "Please select a valid dataset to reshape.")
         return
-        
-    
-    
-    
-    
-    
+   
     transform_options.destroy()
         
     # Open a second window for selecting another dataset as axis (optional)
@@ -133,7 +206,7 @@ def close_transform_window(transform_options, reshape_hdf5Data, dataset_tree):
 
     # Optionally, add a confirm button for the second selection
     confirm_second_button = tk.Button(second_window, text="Confirm Selection", 
-                                    command=lambda: open_reshape_confirmation_window(reshape_hdf5Data, selected_dataset))
+                                    command=lambda: (open_reshape_confirmation_window(reshape_hdf5Data, selected_dataset, second_tree), second_window.destroy()))
     confirm_second_button.pack(pady=10)
 
 
