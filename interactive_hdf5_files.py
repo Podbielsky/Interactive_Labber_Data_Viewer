@@ -131,10 +131,23 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
     
     
 
-def open_reshape_confirmation_window(reshape_hdf5Data, selected_dataset, second_tree):
+def open_reshape_confirmation_window(reshape_hdf5Data, selected_dataset, second_tree, second_window):
     """
     Opens a confirmation window to reshape the selected dataset.
     """
+    def check_reshape_requirements(selected_item):
+        if not isinstance(selected_item, h5py.Dataset):
+            print("Selected item is not a dataset.")
+            return False        
+        elif len(selected_item.shape) != 1:
+            print("Selected dataset does not have 1 dimension.")
+            return False
+        elif selected_item.shape[0] < 2:
+            print("Selected dataset is too short, must have at least 2 elements.")
+            return False
+        else: 
+            return True
+    
     
     selected_items = second_tree.selection()
     if selected_items:    
@@ -148,10 +161,18 @@ def open_reshape_confirmation_window(reshape_hdf5Data, selected_dataset, second_
             print("Error", f"Could not access {file_dir}: {e}")
             return
 
-        selected_axis_dataset = h5obj # TODO: check if the selected item is a single dataset with 1 dimension
-    
+        print('h5obj: ', {h5obj})
+        if check_reshape_requirements(h5obj):
+            second_window.destroy()
+            selected_axis_dataset = h5obj
+            print("Selected item is valid for reshaping.")
+        else:
+            print("No or invalid selection", "Please select a valid dataset to reshape.")
+            return
+        
     else: 
         selected_axis_dataset = None
+    
     
     confirm_window = tk.Toplevel()
     confirm_window.title("Confirm Reshape")
@@ -208,8 +229,23 @@ def close_transform_window(transform_options, reshape_hdf5Data, dataset_tree):
         print("Error", f"Could not access {file_dir}: {e}")
         return
 
+    
+    def check_reshape_requirements(selected_item):
+        if selected_item is None:
+            print("No item selected.")
+            return False
+        elif not isinstance(selected_item, h5py.Dataset):
+            print("Selected item is not a dataset.")
+            return False        
+        elif len(selected_item.shape) != 3:
+            print("Selected dataset does not have 3 dimensions.")
+            return False
+        else: 
+            return True
+
+    
     print('h5obj: ', {h5obj})
-    if check_reshape_requirements(h5obj): # TODO: check if the selected item is a single dataset with 3 dimensions
+    if check_reshape_requirements(h5obj):
         transform_options.destroy()
         selected_dataset = h5obj
         print("Selected item is valid for reshaping.")
@@ -228,7 +264,7 @@ def close_transform_window(transform_options, reshape_hdf5Data, dataset_tree):
 
     # Optionally, add a confirm button for the second selection
     confirm_second_button = tk.Button(second_window, text="Confirm Selection", 
-                                    command=lambda: (open_reshape_confirmation_window(reshape_hdf5Data, selected_dataset, second_tree), second_window.destroy()))
+                                    command=lambda: open_reshape_confirmation_window(reshape_hdf5Data, selected_dataset, second_tree, second_window))
     confirm_second_button.pack(pady=10)
 
 
@@ -253,20 +289,6 @@ def transform_traces_window(hdf5Data):
                               command=lambda: close_transform_window(transform_options, reshape_hdf5Data, dataset_tree))
     confirm_button.pack(pady=10)
     
-    
-    
-def check_reshape_requirements(selected_item):
-    if selected_item is None:
-        print("No item selected.")
-        return False
-    elif not isinstance(selected_item, h5py.Dataset):
-        print("Selected item is not a dataset.")
-        return False        
-    elif len(selected_item.shape) != 3:
-        print("Selected dataset does not have 3 dimensions.")
-        return False
-    else: 
-        return True
     
     
 def add_traces_window(hdf5Data):
