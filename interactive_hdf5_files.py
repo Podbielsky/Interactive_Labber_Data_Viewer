@@ -77,6 +77,10 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
     """
     if type(selected_dataset) is not np.ndarray:
         selected_dataset = np.array(selected_dataset[:])
+        
+    if len(np.shape(selected_dataset)) == 2:
+        selected_dataset = np.array([selected_dataset])
+        dimension_index += 1
     
     if selected_axis_dataset is None: #if no dataset is selected for the x-axis, use default values
         t0, dt = 0, 1
@@ -196,8 +200,8 @@ def transform_traces_window(hdf5Data):
         elif not isinstance(selected_item, h5py.Dataset):
             print("Selected item is not a dataset.")
             return False        
-        elif len(selected_item.shape) != 3:
-            print("Selected dataset does not have 3 dimensions.")
+        elif len(selected_item.shape) not in (2, 3):
+            print("Selected dataset does not have 2 or 3 dimensions.")
             return False
         else: 
             return True
