@@ -129,145 +129,6 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
         out_file.close()
     
     
-    
-
-def open_reshape_confirmation_window(reshape_hdf5Data, selected_dataset, second_tree, second_window):
-    """
-    Opens a confirmation window to reshape the selected dataset.
-    """
-    def check_reshape_requirements(selected_item):
-        if not isinstance(selected_item, h5py.Dataset):
-            print("Selected item is not a dataset.")
-            return False        
-        elif len(selected_item.shape) != 1:
-            print("Selected dataset does not have 1 dimension.")
-            return False
-        elif selected_item.shape[0] < 2:
-            print("Selected dataset is too short, must have at least 2 elements.")
-            return False
-        else: 
-            return True
-    
-    
-    selected_items = second_tree.selection()
-    if selected_items:    
-        selected_item = selected_items[0]
-        values_above = get_values_above_clicked_node(selected_item, second_tree)
-        file_dir_sep = '/'
-        file_dir = file_dir_sep.join(values_above)
-        try:
-            h5obj = reshape_hdf5Data.file[file_dir]
-        except Exception as e:
-            print("Error", f"Could not access {file_dir}: {e}")
-            return
-
-        print('h5obj: ', {h5obj})
-        if check_reshape_requirements(h5obj):
-            second_window.destroy()
-            selected_axis_dataset = h5obj
-            print("Selected item is valid for reshaping.")
-        else:
-            print("No or invalid selection", "Please select a valid dataset to reshape.")
-            return
-        
-    else: 
-        selected_axis_dataset = None
-    
-    
-    confirm_window = tk.Toplevel()
-    confirm_window.title("Confirm Reshape")
-
-    # Frame for dataset labels
-    label_frame = tk.Frame(confirm_window)
-    label_frame.pack(anchor='w', pady=5, padx=5, fill='x')
-
-    tk.Label(label_frame, text=f"Selected Dataset: {selected_dataset}").pack(anchor='w')
-    tk.Label(label_frame, text=f"Selected Axis Dataset: {selected_axis_dataset}").pack(anchor='w')
-
-    # Frame for spinbox + label
-    spin_frame = tk.Frame(confirm_window)
-    spin_frame.pack(anchor='w', pady=5, padx=5, fill='x')
-
-    tk.Label(spin_frame, text="Index of dimension in selected dataset to be used as x axis:").pack(side='left', padx=(0, 5))
-
-    if selected_axis_dataset is not None and np.array(selected_axis_dataset[:]).ndim == 1:
-        dim = np.shape(selected_dataset).index(len(selected_axis_dataset))
-    else:
-        dim = 0
-    dimension_index = tk.IntVar(value=dim)
-
-    tk.Spinbox(spin_frame, from_=0, to=2, increment=1, width=5, textvariable=dimension_index).pack(side='left')
-
-    # Buttons frame
-    button_frame = tk.Frame(confirm_window)
-    button_frame.pack(pady=10)
-
-    confirm_button = tk.Button(
-        button_frame,
-        text="Confirm Reshape",
-        command=lambda: (apply_reshape(selected_dataset, selected_axis_dataset, int(dimension_index.get())), confirm_window.destroy())
-    )
-    confirm_button.pack(side='left', padx=5)
-
-    cancel_button = tk.Button(button_frame, text="Cancel", command=confirm_window.destroy)
-    cancel_button.pack(side='left', padx=5)
-
-def close_transform_window(transform_options, reshape_hdf5Data, dataset_tree):
-    '''
-    closes the dataset selection window and opens a second window to select another dataset as axis.
-    opens the final settings window to confirm the selection and reshape the dataset.
-    '''
-    print("Closing transform options window and proceeding with dataset selection.")
-    selected_items = dataset_tree.selection()
-    selected_item = selected_items[0]
-    values_above = get_values_above_clicked_node(selected_item, dataset_tree)
-    file_dir_sep = '/'
-    file_dir = file_dir_sep.join(values_above)
-    try:
-        h5obj = reshape_hdf5Data.file[file_dir]
-    except Exception as e:
-        print("Error", f"Could not access {file_dir}: {e}")
-        return
-
-    
-    def check_reshape_requirements(selected_item):
-        if selected_item is None:
-            print("No item selected.")
-            return False
-        elif not isinstance(selected_item, h5py.Dataset):
-            print("Selected item is not a dataset.")
-            return False        
-        elif len(selected_item.shape) != 3:
-            print("Selected dataset does not have 3 dimensions.")
-            return False
-        else: 
-            return True
-
-    
-    print('h5obj: ', {h5obj})
-    if check_reshape_requirements(h5obj):
-        transform_options.destroy()
-        selected_dataset = h5obj
-        print("Selected item is valid for reshaping.")
-    else:
-        print("No or invalid selection", "Please select a valid dataset to reshape.")
-        return
-   
-    transform_options.destroy()
-        
-    # Open a second window for selecting another dataset as axis (optional)
-    second_window = tk.Toplevel()
-    second_window.title("Select Another Dataset as Axis (Optional)")
-
-    # Show a treeview of the same HDF5 file in the new window
-    second_tree = display_hdf5_file(second_window, reshape_hdf5Data)
-
-    # Optionally, add a confirm button for the second selection
-    confirm_second_button = tk.Button(second_window, text="Confirm Selection", 
-                                    command=lambda: open_reshape_confirmation_window(reshape_hdf5Data, selected_dataset, second_tree, second_window))
-    confirm_second_button.pack(pady=10)
-
-
 def transform_traces_window(hdf5Data):
     '''
     Opens a window to select a dataset to reshape into traces.
@@ -284,11 +145,46 @@ def transform_traces_window(hdf5Data):
     # Open file and keep it open for the window lifetime
     reshape_hdf5Data.file = h5py.File(pth, 'r')
 
+    def check_axis_reshape_requirements(selected_item):
+        if not isinstance(selected_item, h5py.Dataset):
+            # print("Selected item is not a dataset.")
+            return False        
+        elif len(selected_item.shape) != 1:
+            # print("Selected dataset does not have 1 dimension.")
+            return False
+        elif selected_item.shape[0] < 2:
+            # print("Selected dataset is too short, must have at least 2 elements.")
+            return False
+        else: 
+            return True
+    
+    def check_dataset_reshape_requirements(selected_item):
+        if selected_item is None:
+            # print("No item selected.")
+            return False
+        elif not isinstance(selected_item, h5py.Dataset):
+            # print("Selected item is not a dataset.")
+            return False        
+        elif len(selected_item.shape) != 3:
+            # print("Selected dataset does not have 3 dimensions.")
+            return False
+        else: 
+            return True
+
+
     def on_var_change(*args):
         selected_dataset = dataset_map[dataset_selection.get()] if dataset_selection.get() in dataset_map else None
         selected_axis_dataset = axis_map[axis_selection.get()] if axis_selection.get() in axis_map else None
         dataset_label_text.set(f"Selected Dataset: {selected_dataset if selected_dataset is not None else ''}")
         axis_label_text.set(f"Selected Axis Dataset: {selected_axis_dataset if selected_axis_dataset is not None else ''}")
+        
+        if selected_axis_dataset is not None and np.array(selected_axis_dataset[:]).ndim == 1:
+            dim = np.shape(selected_dataset).index(len(selected_axis_dataset))
+        else:
+            dim = 0
+        dimension_index.set(dim)
+
+    
             
     transform_options = tk.Toplevel()
 
@@ -313,14 +209,16 @@ def transform_traces_window(hdf5Data):
     axis_map = {}
     file = reshape_hdf5Data.file
     def visitor(name, obj):
-        if isinstance(obj, h5py.Dataset):
+        if isinstance(obj, h5py.Dataset) and check_dataset_reshape_requirements(obj):
             dataset_map[name] = obj  # name is the full HDF5 path
     file.visititems(visitor)
 
     def visitor_axis(name, obj):
-        if isinstance(obj, h5py.Dataset):
+        if isinstance(obj, h5py.Dataset) and check_axis_reshape_requirements(obj):
             axis_map[name] = obj  # name is the full HDF5 path
     file.visititems(visitor_axis)
+    
+    axis_map['None'] = None  # Add a 'None' option for no axis dataset
 
     datasets_names = list(dataset_map.keys())
     axis_names = list(axis_map.keys())
@@ -346,10 +244,14 @@ def transform_traces_window(hdf5Data):
     spin_frame = tk.Frame(transform_options)
     spin_frame.pack(anchor='w', pady=5, padx=5, fill='x')
 
+    
+
     tk.Label(spin_frame, text="Index of dimension in selected dataset to be used as x axis:").pack(side='left', padx=(0, 5))
 
     dimension_index = tk.IntVar(value=0)  # Default to 0
     tk.Spinbox(spin_frame, from_=0, to=2, increment=1, width=5, textvariable=dimension_index).pack(side='left')
+
+    on_var_change()  # Initial call to set labels
 
     # Buttons frame
     button_frame = tk.Frame(transform_options)
