@@ -106,11 +106,20 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
     shape = selected_dataset.shape
     print(f"Shape of spectra: {shape}") 
         
-    # Use the means of the traces as the data to be displayed in the plot map
-    data_data = np.zeros((shape_original[0], 3, shape_original[1]))
-    data_data[:, 0, :] = np.arange(shape_original[0])[:, None]
-    data_data[:, 1, :] = np.arange(shape_original[1])[None, :]
-    data_data[:, 2, :] = np.mean(spectra_original, axis=2)  # Calculate mean along the last axis of original data
+    # Validate shape_original dimensions
+    if len(shape_original) < 2:
+        raise ValueError("The selected dataset must have at least two dimensions.")
+
+    # Adjust data_data shape to account for dimension_index
+    reduced_shape = list(shape_original)
+    reduced_shape.pop(dimension_index)  # Remove the selected dimension
+
+    data_data = np.zeros((reduced_shape[0], 3, reduced_shape[1]))
+
+    # Assign values to data_data with explicit broadcasting
+    data_data[:, 0, :] = np.broadcast_to(np.arange(reduced_shape[0])[:, None], (reduced_shape[0], reduced_shape[1]))
+    data_data[:, 1, :] = np.broadcast_to(np.arange(reduced_shape[1])[None, :], (reduced_shape[0], reduced_shape[1]))
+    data_data[:, 2, :] = np.mean(spectra_original, axis=dimension_index).reshape(reduced_shape)  # Reshape mean result to match reduced dimensions
 
     print(f"Shape of data_data: {data_data.shape}")
 
@@ -129,7 +138,7 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
         traces_grp.create_dataset('Alazar Slytherin - Ch1 - Data_t0dt', data=[[t0, dt]])
 
         data_grp = out_file.create_group('Data')
-        data_grp.attrs['Step dimensions'] = [shape_original[0], shape_original[1]]
+        data_grp.attrs['Step dimensions'] = [reduced_shape[0], reduced_shape[1]]
         data_grp.attrs['Step index'] = [0, 1]
         data_grp.create_dataset('Data', data=data_data)
         data_grp.create_dataset('Channel names', data=[(b'Axis 1', b''), (b'Axis 2', b''), (b'Channel 1', b'')])
@@ -171,13 +180,13 @@ def transform_traces_window(hdf5Data):
     def check_dataset_reshape_requirements(selected_item):
         # Check if the selected item is a valid dataset for reshaping to traces
         if selected_item is None:
-            # print("No item selected.")
+            print("No item selected.")
             return False
         elif not isinstance(selected_item, h5py.Dataset):
-            # print("Selected item is not a dataset.")
+            print("Selected item is not a dataset.")
             return False        
         elif len(selected_item.shape) != 3:
-            # print("Selected dataset does not have 3 dimensions.")
+            print("Selected dataset does not have 3 dimensions.")
             return False
         else: 
             return True
