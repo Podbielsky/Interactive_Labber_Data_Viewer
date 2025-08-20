@@ -75,15 +75,16 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
     by moving the specified dimension to the first position and reshaping it.
     
     """
-    
-    selected_dataset = np.array(selected_dataset[:])
+    if type(selected_dataset) is not np.ndarray:
+        selected_dataset = np.array(selected_dataset[:])
     
     if selected_axis_dataset is None: #if no dataset is selected for the x-axis, use default values
         t0, dt = 0, 1
         print("No axis dataset selected, using default t0=0 and dt=1.")
     else:
         # materialize to a NumPy array (works for h5py.Dataset and ndarrays)
-        arr = np.asarray(selected_axis_dataset[()]) if hasattr(selected_axis_dataset, "__getitem__") else np.asarray(selected_axis_dataset)
+        if type(selected_axis_dataset) is not np.ndarray:
+            arr = np.asarray(selected_axis_dataset[()]) if hasattr(selected_axis_dataset, "__getitem__") else np.asarray(selected_axis_dataset)
         arr = np.ravel(arr)  # flatten
 
         if arr.ndim == 1 and arr.size >= 2: # Check if the axis dataset is 1D and has at least 2 elements
@@ -153,15 +154,25 @@ def transform_traces_window(hdf5Data):
     Opens a window to select a dataset to reshape into traces.
     '''
     
-    pth = filedialog.askopenfilename(filetypes=[("HDF5 files", "*.hdf5")])
+    pth = filedialog.askopenfilename(filetypes=[("HDF5 files", "*.hdf5"), ("Numpy files", "*.npy")])
     if not pth:
         print("No file selected. Operation cancelled.")
         return
+    root, ext = os.path.splitext(pth)
 
-    reshape_hdf5Data = HDF5Data(wdir=pth)
-    reshape_hdf5Data.set_path(pth, 'r')
-    # Open file and keep it open for the window lifetime
-    reshape_hdf5Data.file = h5py.File(pth, 'r')
+    if ext == 'hdf5':
+        reshape_hdf5Data = HDF5Data(wdir=pth)
+        reshape_hdf5Data.set_path(pth, 'r')
+        # Open file and keep it open for the window lifetime
+        reshape_hdf5Data.file = h5py.File(pth, 'r')
+    else: 
+        arr = np.load(pth)
+        print("Select axis numpy file for traces if needed.")
+        axis_path = filedialog.askopenfilename(filetypes=[("Numpy files", "*.npy")])
+        if not axis_path:
+            axis_arr = None
+        else: 
+            axis_arr = np.load(axis_path)
 
     def check_axis_reshape_requirements(selected_item):
         # Check if the selected item is a valid dataset as x-axis for traces
@@ -216,6 +227,8 @@ def transform_traces_window(hdf5Data):
         except Exception:
             pass
         transform_options.destroy()
+  
+    
     transform_options.protocol("WM_DELETE_WINDOW", on_close_transform_options)
 
     
@@ -224,49 +237,52 @@ def transform_traces_window(hdf5Data):
     label_frame.pack(anchor='w', pady=5, padx=5, fill='x')
 
     # Store the valid datasets and axis datasets in dictionaries
-    dataset_map = {}
-    axis_map = {}
-    file = reshape_hdf5Data.file
-    def visitor(name, obj):
-        if isinstance(obj, h5py.Dataset) and check_dataset_reshape_requirements(obj):
-            dataset_map[name] = obj  # name is the full HDF5 path
-    file.visititems(visitor)
+    if ext == 'hdf5':
+        dataset_map = {}
+        axis_map = {}
+        file = reshape_hdf5Data.file
+        def visitor(name, obj):
+            if isinstance(obj, h5py.Dataset) and check_dataset_reshape_requirements(obj):
+                dataset_map[name] = obj  # name is the full HDF5 path
+        file.visititems(visitor)
 
-    def visitor_axis(name, obj):
-        if isinstance(obj, h5py.Dataset) and check_axis_reshape_requirements(obj):
-            axis_map[name] = obj  # name is the full HDF5 path
-    file.visititems(visitor_axis)
-    
-    axis_map['None'] = None  # Add a 'None' option for no axis dataset
+        def visitor_axis(name, obj):
+            if isinstance(obj, h5py.Dataset) and check_axis_reshape_requirements(obj):
+                axis_map[name] = obj  # name is the full HDF5 path
+        file.visititems(visitor_axis)
+        
+        axis_map['None'] = None  # Add a 'None' option for no axis dataset
 
-    datasets_names = list(dataset_map.keys())
-    axis_names = list(axis_map.keys())
+        datasets_names = list(dataset_map.keys())
+        axis_names = list(axis_map.keys())
 
-    dataset_selection = tk.StringVar(value=datasets_names[0] if datasets_names else "")  # default selection
-    database_combo = ttk.Combobox(label_frame, textvariable=dataset_selection, values=datasets_names, state="readonly")
-    
+        dataset_selection = tk.StringVar(value=datasets_names[0] if datasets_names else "")  # default selection
+        database_combo = ttk.Combobox(label_frame, textvariable=dataset_selection, values=datasets_names, state="readonly")
+        
 
-    axis_selection = tk.StringVar(value=axis_names[0] if axis_names else "")  # default selection
-    axis_combo = ttk.Combobox(label_frame, textvariable=axis_selection, values=axis_names, state="readonly")
-    
-    dataset_selection.trace_add("write", on_var_change)
-    axis_selection.trace_add("write", on_var_change)
+        axis_selection = tk.StringVar(value=axis_names[0] if axis_names else "")  # default selection
+        axis_combo = ttk.Combobox(label_frame, textvariable=axis_selection, values=axis_names, state="readonly")
+        
+        dataset_selection.trace_add("write", on_var_change)
+        axis_selection.trace_add("write", on_var_change)
 
-    
-    dataset_label_text = tk.StringVar(value=f"{dataset_map[dataset_selection.get()] if dataset_selection.get() in dataset_map else ''}")
-    axis_label_text = tk.StringVar(value=f"{axis_map[axis_selection.get()] if axis_selection.get() in axis_map else ''}")
+        
+        dataset_label_text = tk.StringVar(value=f"{dataset_map[dataset_selection.get()] if dataset_selection.get() in dataset_map else ''}")
+        axis_label_text = tk.StringVar(value=f"{axis_map[axis_selection.get()] if axis_selection.get() in axis_map else ''}")
 
-    database_combo.grid(row=0, column=1, padx=10, pady=10, sticky='w')
-    axis_combo.grid(row=1, column=1, padx=10, pady=10, sticky='w')
-    
-    tk.Label(label_frame, textvariable=dataset_label_text).grid(row=0, column=2, padx=10, pady=5, sticky='w')    
-    tk.Label(label_frame, textvariable=axis_label_text).grid(row=1, column=2, padx=10, pady=5, sticky='w')    
-    
-    tk.Label(label_frame, text="Selected Dataset:").grid(row=0, column=0, padx=10, pady=5, sticky='e')
-    tk.Label(label_frame, text="Selected Axis Dataset:").grid(row=1, column=0, padx=10, pady=5, sticky='e')
-
+        database_combo.grid(row=0, column=1, padx=10, pady=10, sticky='w')
+        axis_combo.grid(row=1, column=1, padx=10, pady=10, sticky='w')
+        
+        tk.Label(label_frame, textvariable=dataset_label_text).grid(row=0, column=2, padx=10, pady=5, sticky='w')    
+        tk.Label(label_frame, textvariable=axis_label_text).grid(row=1, column=2, padx=10, pady=5, sticky='w')    
+        
+        tk.Label(label_frame, text="Selected Dataset:").grid(row=0, column=0, padx=10, pady=5, sticky='e')
+        tk.Label(label_frame, text="Selected Axis Dataset:").grid(row=1, column=0, padx=10, pady=5, sticky='e')
+    else:
+        tk.Label(label_frame, text=f"Numpy file shape: {arr.shape}")
     # Frame for spinbox + label
     spin_frame = tk.Frame(transform_options)
+    
     spin_frame.pack(anchor='w', pady=5, padx=5, fill='x')
 
     tk.Label(spin_frame, text="Index of dimension in selected dataset to be used as x axis:").pack(side='left', padx=(0, 5))
@@ -288,17 +304,25 @@ def transform_traces_window(hdf5Data):
     # add a spinbox to select the dimension that will be used as trace length
     tk.Spinbox(spin_frame, from_=0, to=2, increment=1, width=5, textvariable=dimension_index,validate="key", validatecommand=vcmd).pack(side='left')
 
-    on_var_change()  # Initial call to set labels
+    if ext == 'hdf5':
+        on_var_change()  # Initial call to set labels
 
     # Buttons frame
     button_frame = tk.Frame(transform_options)
     button_frame.pack(pady=10)
 
-    confirm_button = tk.Button(
-        button_frame,
-        text="Confirm Reshape",
-        command=lambda: (apply_reshape(dataset_map[dataset_selection.get()], axis_map[axis_selection.get()], int(dimension_index.get())), transform_options.destroy())
-    )
+    if ext == 'hdf5':
+        confirm_button = tk.Button(
+            button_frame,
+            text="Confirm Reshape",
+            command=lambda: (apply_reshape(dataset_map[dataset_selection.get()], axis_map[axis_selection.get()], int(dimension_index.get())), transform_options.destroy())
+        )
+    else:
+        confirm_button = tk.Button(
+            button_frame,
+            text="Confirm Reshape",
+            command=lambda: (apply_reshape(arr, axis_arr, int(dimension_index.get())), transform_options.destroy())
+        )
     confirm_button.pack(side='left', padx=5)
 
     cancel_button = tk.Button(button_frame, text="Cancel", command=transform_options.destroy)
