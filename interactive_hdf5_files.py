@@ -175,8 +175,8 @@ def transform_traces_window(hdf5Data):
     def on_var_change(*args):
         selected_dataset = dataset_map[dataset_selection.get()] if dataset_selection.get() in dataset_map else None
         selected_axis_dataset = axis_map[axis_selection.get()] if axis_selection.get() in axis_map else None
-        dataset_label_text.set(f"Selected Dataset: {selected_dataset if selected_dataset is not None else ''}")
-        axis_label_text.set(f"Selected Axis Dataset: {selected_axis_dataset if selected_axis_dataset is not None else ''}")
+        dataset_label_text.set(f"{selected_dataset if selected_dataset is not None else ''}")
+        axis_label_text.set(f"{selected_axis_dataset if selected_axis_dataset is not None else ''}")
         
         if selected_axis_dataset is not None and np.array(selected_axis_dataset[:]).ndim == 1:
             dim = np.shape(selected_dataset).index(len(selected_axis_dataset))
@@ -197,10 +197,7 @@ def transform_traces_window(hdf5Data):
         transform_options.destroy()
     transform_options.protocol("WM_DELETE_WINDOW", on_close_transform_options)
 
-    # Frame for dataset selection
-    dataset_frame = tk.Frame(transform_options)
-    dataset_frame.pack(anchor='n', pady=5, padx=5, fill='x')
-
+    
     # Frame for dataset labels
     label_frame = tk.Frame(transform_options)
     label_frame.pack(anchor='w', pady=5, padx=5, fill='x')
@@ -224,21 +221,29 @@ def transform_traces_window(hdf5Data):
     axis_names = list(axis_map.keys())
 
     dataset_selection = tk.StringVar(value=datasets_names[0] if datasets_names else "")  # default selection
-    database_combo = ttk.Combobox(dataset_frame, textvariable=dataset_selection, values=datasets_names, state="readonly")
-    database_combo.pack(padx=10, pady=10)
+    database_combo = ttk.Combobox(label_frame, textvariable=dataset_selection, values=datasets_names, state="readonly")
+    
 
     axis_selection = tk.StringVar(value=axis_names[0] if axis_names else "")  # default selection
-    axis_combo = ttk.Combobox(dataset_frame, textvariable=axis_selection, values=axis_names, state="readonly")
-    axis_combo.pack(padx=10, pady=10)
-
+    axis_combo = ttk.Combobox(label_frame, textvariable=axis_selection, values=axis_names, state="readonly")
+    
     dataset_selection.trace_add("write", on_var_change)
     axis_selection.trace_add("write", on_var_change)
 
-    dataset_label_text = tk.StringVar(value=f"Selected Dataset: {dataset_map[dataset_selection.get()] if dataset_selection.get() in dataset_map else ''}")
-    axis_label_text = tk.StringVar(value=f"Selected Axis Dataset: {axis_map[axis_selection.get()] if axis_selection.get() in axis_map else ''}")
     
-    tk.Label(label_frame, textvariable=dataset_label_text).pack(anchor='w')
-    tk.Label(label_frame, textvariable=axis_label_text).pack(anchor='w')
+    dataset_label_text = tk.StringVar(value=f"{dataset_map[dataset_selection.get()] if dataset_selection.get() in dataset_map else ''}")
+    axis_label_text = tk.StringVar(value=f"{axis_map[axis_selection.get()] if axis_selection.get() in axis_map else ''}")
+
+    database_combo.grid(row=0, column=1, padx=10, pady=10, sticky='w')
+    axis_combo.grid(row=1, column=1, padx=10, pady=10, sticky='w')
+    
+    tk.Label(label_frame, textvariable=dataset_label_text).grid(row=0, column=2, padx=10, pady=5, sticky='w')    
+    tk.Label(label_frame, textvariable=axis_label_text).grid(row=1, column=2, padx=10, pady=5, sticky='w')    
+    
+    tk.Label(label_frame, text="Selected Dataset:").grid(row=0, column=0, padx=10, pady=5, sticky='e')
+    tk.Label(label_frame, text="Selected Axis Dataset:").grid(row=1, column=0, padx=10, pady=5, sticky='e')
+
+
 
     # Frame for spinbox + label
     spin_frame = tk.Frame(transform_options)
@@ -248,8 +253,19 @@ def transform_traces_window(hdf5Data):
 
     tk.Label(spin_frame, text="Index of dimension in selected dataset to be used as x axis:").pack(side='left', padx=(0, 5))
 
+    def validate_int(new_value):
+        if new_value == "":  # allow empty (so user can type)
+            return True
+        try:
+            value = int(new_value)
+        except ValueError:
+            return False
+        return 0 <= value <= 2
+    
+    vcmd = (transform_options.register(validate_int), '%P')  # %P is the new value of the spinbox    
+        
     dimension_index = tk.IntVar(value=0)  # Default to 0
-    tk.Spinbox(spin_frame, from_=0, to=2, increment=1, width=5, textvariable=dimension_index).pack(side='left')
+    tk.Spinbox(spin_frame, from_=0, to=2, increment=1, width=5, textvariable=dimension_index,validate="key", validatecommand=vcmd).pack(side='left')
 
     on_var_change()  # Initial call to set labels
 
