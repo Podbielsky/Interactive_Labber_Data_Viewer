@@ -69,9 +69,16 @@ def get_unique_filename(filepath):
 
 
 def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
+    """
+    Added by Nico Reinders
+    Reshapes the selected dataset to be compatible with the requirements of the data viewer "Plot Map with Trace Data"
+    by moving the specified dimension to the first position and reshaping it.
+    
+    """
     
     selected_dataset = np.array(selected_dataset[:])
-    if selected_axis_dataset is None:
+    
+    if selected_axis_dataset is None: #if no dataset is selected for the x-axis, use default values
         t0, dt = 0, 1
         print("No axis dataset selected, using default t0=0 and dt=1.")
     else:
@@ -79,11 +86,11 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
         arr = np.asarray(selected_axis_dataset[()]) if hasattr(selected_axis_dataset, "__getitem__") else np.asarray(selected_axis_dataset)
         arr = np.ravel(arr)  # flatten
 
-        if arr.ndim == 1 and arr.size >= 2:
+        if arr.ndim == 1 and arr.size >= 2: # Check if the axis dataset is 1D and has at least 2 elements
             t0 = arr[0]
             diffs = np.diff(arr)
             dt = np.min(np.abs(diffs))
-        else:
+        else: # if the axis dataset has unusable shape, use default values
             t0, dt = 0, 1
             print("Warning: Selected axis dataset is not 1D or too short, using default t0=0 and dt=1.")
 
@@ -95,10 +102,11 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
     spectra_original = selected_dataset.copy()
 
     selected_dataset = np.moveaxis(selected_dataset, dimension_index, 0)  # Move the selected axis to the first position
-    selected_dataset = np.reshape(selected_dataset, (selected_dataset.shape[0], 1, -1))
+    selected_dataset = np.reshape(selected_dataset, (selected_dataset.shape[0], 1, -1)) # Reshape to required shape
     shape = selected_dataset.shape
     print(f"Shape of spectra: {shape}") 
         
+    # Use the means of the traces as the data to be displayed in the plot map
     data_data = np.zeros((shape_original[0], 3, shape_original[1]))
     data_data[:, 0, :] = np.arange(shape_original[0])[:, None]
     data_data[:, 1, :] = np.arange(shape_original[1])[None, :]
@@ -113,6 +121,7 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
     else:
         print("User cancelled")
 
+    # Save the reshaped data and traces in the output file
     with h5py.File(output_path, 'w') as out_file:
         traces_grp = out_file.create_group('Traces', track_order=True)
         traces_grp.create_dataset('Data', data=selected_dataset)
@@ -131,8 +140,8 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
     
 def transform_traces_window(hdf5Data):
     '''
+    Added by Nico Reinders
     Opens a window to select a dataset to reshape into traces.
-    Button runs the close_transform_window function to close the window and make axis data set selection possible.
     '''
     
     pth = filedialog.askopenfilename(filetypes=[("HDF5 files", "*.hdf5")])
@@ -146,6 +155,7 @@ def transform_traces_window(hdf5Data):
     reshape_hdf5Data.file = h5py.File(pth, 'r')
 
     def check_axis_reshape_requirements(selected_item):
+        # Check if the selected item is a valid dataset as x-axis for traces
         if not isinstance(selected_item, h5py.Dataset):
             # print("Selected item is not a dataset.")
             return False        
@@ -159,6 +169,7 @@ def transform_traces_window(hdf5Data):
             return True
     
     def check_dataset_reshape_requirements(selected_item):
+        # Check if the selected item is a valid dataset for reshaping to traces
         if selected_item is None:
             # print("No item selected.")
             return False
@@ -172,7 +183,8 @@ def transform_traces_window(hdf5Data):
             return True
 
 
-    def on_var_change(*args):
+    def on_var_change(*args): 
+        # Update the labels and dimension index based on the selected datasets
         selected_dataset = dataset_map[dataset_selection.get()] if dataset_selection.get() in dataset_map else None
         selected_axis_dataset = axis_map[axis_selection.get()] if axis_selection.get() in axis_map else None
         dataset_label_text.set(f"{selected_dataset if selected_dataset is not None else ''}")
@@ -202,6 +214,7 @@ def transform_traces_window(hdf5Data):
     label_frame = tk.Frame(transform_options)
     label_frame.pack(anchor='w', pady=5, padx=5, fill='x')
 
+    # Store the valid datasets and axis datasets in dictionaries
     dataset_map = {}
     axis_map = {}
     file = reshape_hdf5Data.file
@@ -243,17 +256,14 @@ def transform_traces_window(hdf5Data):
     tk.Label(label_frame, text="Selected Dataset:").grid(row=0, column=0, padx=10, pady=5, sticky='e')
     tk.Label(label_frame, text="Selected Axis Dataset:").grid(row=1, column=0, padx=10, pady=5, sticky='e')
 
-
-
     # Frame for spinbox + label
     spin_frame = tk.Frame(transform_options)
     spin_frame.pack(anchor='w', pady=5, padx=5, fill='x')
 
-    
-
     tk.Label(spin_frame, text="Index of dimension in selected dataset to be used as x axis:").pack(side='left', padx=(0, 5))
 
     def validate_int(new_value):
+        # validate the spinbox input
         if new_value == "":  # allow empty (so user can type)
             return True
         try:
@@ -265,6 +275,8 @@ def transform_traces_window(hdf5Data):
     vcmd = (transform_options.register(validate_int), '%P')  # %P is the new value of the spinbox    
         
     dimension_index = tk.IntVar(value=0)  # Default to 0
+    
+    # add a spinbox to select the dimension that will be used as trace length
     tk.Spinbox(spin_frame, from_=0, to=2, increment=1, width=5, textvariable=dimension_index,validate="key", validatecommand=vcmd).pack(side='left')
 
     on_var_change()  # Initial call to set labels
