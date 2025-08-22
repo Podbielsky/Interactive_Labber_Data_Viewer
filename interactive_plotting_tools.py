@@ -1064,7 +1064,7 @@ class InteractiveArrayPlotter:
         shape_frame = tk.Frame(right_frame)
         shape_frame.pack(side=tk.TOP, fill=tk.X, pady=25)
         self.selection_shape = tk.StringVar(value='Ellipse')
-        self.ellipse_button = tk.Button(shape_frame, text='Ellipse', command=self.select_ellipse, relief='sunken')
+        self.ellipse_button = tk.Button(shape_frame, text='Ellipse', command=self.select_ellipse, relief='sunken', bg='#BBBBBB')
         self.ellipse_button.pack(side=tk.LEFT, padx=5)
         self.rectangle_button = tk.Button(shape_frame, text='Rectangle', command=self.select_rect, relief='raised')
         self.rectangle_button.pack(side=tk.LEFT, padx=5) 
@@ -1125,18 +1125,24 @@ class InteractiveArrayPlotter:
         
         self.fft_filter_sliced_data_preview = two_d_ifft_on_data(self.fft_filter_sliced_data_cut, self.fft_filter_x, self.fft_filter_y, mode='Complex')[2]
         self.sliced_data = np.abs(self.fft_filter_sliced_data_preview)
-
+        
+        # remove all masks
+        for i, shape in enumerate(self.shapes):
+            shape.remove()
+            self.shapes = np.delete(self.shapes, i)
+         
+            
     def select_ellipse(self):
         #### Created by Nico Reinders ####
         # Handles ellipse selection for FFT mask drawing.
 
         if self.selection_shape.get() == 'Ellipse':
             self.selection_shape.set('Empty')
-            self.ellipse_button.config(relief='raised')
+            self.ellipse_button.config(relief='raised', bg='SystemButtonFace')
         else:    
             self.selection_shape.set('Ellipse')
-            self.ellipse_button.config(relief='sunken')
-            self.rectangle_button.config(relief='raised')
+            self.ellipse_button.config(relief='sunken', bg='#BBBBBB')
+            self.rectangle_button.config(relief='raised', bg='SystemButtonFace')
     
     def select_rect(self):
         #### Created by Nico Reinders ####
@@ -1144,11 +1150,11 @@ class InteractiveArrayPlotter:
 
         if self.selection_shape.get() == 'Rectangle':
             self.selection_shape.set('Empty')
-            self.rectangle_button.config(relief='raised')
+            self.rectangle_button.config(relief='raised', bg='SystemButtonFace')
         else:
             self.selection_shape.set('Rectangle')
-            self.ellipse_button.config(relief='raised')
-            self.rectangle_button.config(relief='sunken')
+            self.ellipse_button.config(relief='raised', bg='SystemButtonFace')
+            self.rectangle_button.config(relief='sunken', bg='#BBBBBB')
 
     def fft_filter_on_press(self, event):
         #### Created by Nico Reinders ####
@@ -1268,7 +1274,9 @@ class InteractiveArrayPlotter:
             
             # Clear the axes and plot the FFT data with the current masks
             self.fft_filter_ax.clear()
-            self.fft_filter_ax.pcolormesh(self.fft_filter_x, self.fft_filter_y, np.absolute(self.fft_filter_sliced_data), norm=colors.LogNorm(vmin=self.vmin, vmax=self.vmax),
+            vmin = np.min(np.abs(self.fft_filter_sliced_data))
+            vmax = np.max(np.abs(self.fft_filter_sliced_data))
+            self.fft_filter_ax.pcolormesh(self.fft_filter_x, self.fft_filter_y, np.absolute(self.fft_filter_sliced_data), norm=colors.LogNorm(vmin=vmin, vmax=vmax),
                                           cmap=self.colormap_combobox.get(), shading='auto', zorder=1, linewidth=0, rasterized=True)
             for patch in self.shapes:
                 self.fft_filter_ax.add_patch(patch)
@@ -1294,7 +1302,30 @@ class InteractiveArrayPlotter:
             # Show the preview of the filtered data            
             self.fft_filter_x_preview, self.fft_filter_y_preview, self.fft_filter_sliced_data_preview = two_d_ifft_on_data(self.fft_filter_sliced_data_cut, self.fft_filter_x, self.fft_filter_y, mode='Complex')
             self.fft_filter_ax.clear()            
-            self.fft_filter_ax.pcolormesh(self.fft_filter_x_preview, self.fft_filter_y_preview, np.abs(self.fft_filter_sliced_data_preview), cmap=self.colormap_combobox.get(), shading='auto', zorder=1, linewidth=0, rasterized=True)
+            vmin = np.min(self.fft_filter_sliced_data_preview)
+            vmax = np.max(self.fft_filter_sliced_data_preview)
+            
+            # Ensure the preview data is real-valued for plotting
+            data_to_plot = self.fft_filter_sliced_data_preview
+            if np.iscomplexobj(data_to_plot):
+                print("Warning: Complex data in FFT preview. Using np.abs() for plotting.")
+                data_to_plot = np.abs(data_to_plot)
+            # Compute vmin/vmax from the real-valued data
+            vmin = np.min(data_to_plot)
+            vmax = np.max(data_to_plot)
+            try:
+                self.fft_filter_ax.pcolormesh(
+                    self.fft_filter_x_preview,
+                    self.fft_filter_y_preview,
+                    data_to_plot,
+                    cmap=self.colormap_combobox.get(), shading='auto', zorder=1, linewidth=0, rasterized=True, vmin=vmin, vmax=vmax)
+            except TypeError as e:
+                if hasattr(self.fft_filter_sliced_data_preview, 'dtype') and np.issubdtype(self.fft_filter_sliced_data_preview.dtype, np.complexfloating):
+                    print("Error: self.fft_filter_sliced_data_preview is complex. Use np.abs() or .real before plotting.")
+                else:
+                    print(f"Plotting error: {e}")
+                raise
+            
             self.fft_filter_sliced_data = two_d_fft_on_data(self.sliced_data, self.X, self.Y, mode='Complex')[2]
             self.fft_filter_ax.set_xlabel(self.name_data_x_axis)
             self.fft_filter_ax.set_ylabel(self.name_data_y_axis)

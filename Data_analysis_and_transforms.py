@@ -267,6 +267,10 @@ def two_d_ifft_on_data(fft_data, ixg, iyg, mode='Amplitude'):
     yg = np.linspace(-0.5 * dy, 0.5 * dy, fft_data.shape[0])
     xg, yg = np.meshgrid(xg, yg)
 
+    # change data type to float if the imaginary part is zero
+    if np.all(np.imag(reconstructed_data) == 0):
+        reconstructed_data = reconstructed_data.real.astype(float)
+    
     return xg, yg, reconstructed_data
 
 
