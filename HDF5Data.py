@@ -172,6 +172,7 @@ class HDF5Data:
         self.name_axis = name_axis
         self.name_data = name_data
         self.measure_data = measure_data
+        self.channels = None
         self.measure_dim = measure_dim
         self.completed_measurement = True
         self.current_h5dir = current_h5dir
@@ -360,6 +361,8 @@ class HDF5Data:
                 self.set_array_tags()
             if self.measure_dim is None:
                 self.set_measure_dim()
+            if self.channels is None:
+                self.channels = self.file['Channels']
             self.complete_status()
             # Calculate the expected shape of the arrays
             should_array_shape = (int(self.measure_dim[0]), int(np.prod(np.array(self.measure_dim)[1:])))
@@ -371,6 +374,17 @@ class HDF5Data:
             name_data = []
             measurement_axis = []
             name_axis = []
+
+            # Create a dictionary to store channel parameters
+            channel_params = {}
+            for channel in self.channels:
+                channel_name = channel['name']
+                if channel_name in log_list_names:
+                    channel_params[channel_name] = {
+                        'gain': channel['gain'],
+                        'offset': channel['offset'],
+                        'amp': channel['amp']
+                    }
 
             for name in array_tags_names:
                 index = array_tags_names.index(name)
@@ -388,7 +402,25 @@ class HDF5Data:
                 # Append data to the corresponding lists
                 if name in log_list_names:
                     name_data.append(name)
-                    measurement_data.append(target_array)
+
+                    # Apply the formula (target_array/Amp - Offset) / Gain if channel parameters exist
+                    if name in channel_params:
+                        params = channel_params[name]
+                        gain = params['gain']
+                        offset = params['offset']
+                        amp = params['amp']
+
+                        # Avoid division by zero
+                        if amp != 0 and gain != 0:
+                            processed_array = (target_array / amp - offset) / gain
+                            measurement_data.append(processed_array)
+                        else:
+                            # If gain or amp is zero, just append the original array
+                            print(f"Warning: gain or amp is zero for channel {name}. Using original data.")
+                            measurement_data.append(target_array)
+                    else:
+                        # If channel parameters don't exist, append the original array
+                        measurement_data.append(target_array)
                 else:
                     name_axis.append(name)
                     measurement_axis.append(target_array)
