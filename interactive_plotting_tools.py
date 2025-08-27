@@ -20,7 +20,7 @@ from scipy import constants as co
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, two_d_ifft_on_data, evaluate_poly_background_2d,
                                           correct_median_diff, correct_mean_of_lines, gradient_5p_stencil,
                                           subtract_trace_average, cut_data_range, extract_linecut,
-                                          skewed_gaussian_func_shape, beta_func_shape, trace_wise_min_max_scaling)
+                                          skewed_gaussian_func_shape, beta_func_shape, trace_wise_min_max_scaling, lorentzian, gaussian)
 from gamma_map import (get_t_rates, get_fourier, fft_correction_select, fft_correction_apply, get_cuts)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap
 neon_cmap = make_neon_cyclic_colormap()
@@ -226,6 +226,7 @@ class InteractiveArrayPlotter:
         self.tool_menu.add_command(label="Draw Lines", command=self.open_draw_lines_window)
         if self.contains_traces:
             self.tool_menu.add_command(label="Correct Trace Fourier spectrum", command=self.open_fft_trace_correction_window)
+            self.tool_menu.add_command(label="Fit Traces", command=self.fit_traces)
         self.menubar.add_cascade(label="Tools", menu=self.tool_menu)
         self.tool_menu.add_command(label="2-D FFT Filter", command=self.open_2d_fft_filter)
         
@@ -990,6 +991,22 @@ class InteractiveArrayPlotter:
         submit_button.pack(side=tk.BOTTOM)
         self.data_axis_transform_naming_frame.pack(side=tk.LEFT)
         self.data_axis_transform_scaling_frame.pack(side=tk.RIGHT)
+
+    def fit_traces(self):
+        
+        if not self.loaded:
+            print('fetching data...')
+            self.data.set_traces()
+            self.data.set_traces_dt()
+            self.traces = self.data.traces
+            self.times = self.data.traces_dt * np.arange(0, len(self.traces[0][0]))
+            self.loaded = True
+            print(self.traces.shape)
+            self.traces = np.reshape(self.traces, (-1, self.traces.shape[2]))
+            print(self.traces.shape)
+        traces_fitter = TracesFitter(self.traces, self.times, self.root)
+        
+    
 
     def open_fft_trace_correction_window(self):
         #### Created by Nico Reinders ####
@@ -2195,6 +2212,82 @@ class InteractiveTimeTraceMapPlotter(InteractiveArrayPlotter):
 
         super().__init__(root, hdf5data)
 
+class TracesFitter:
+    def __init__(self, traces, times, master=None):
+        
+        
+        if master is None:
+            self.root = tk.Tk()
+            self.root.title("Traces Fitter")
+            self.root.geometry("800x600")
+        else:
+            self.root = tk.Toplevel(master)
+            self.root.title("Traces Fitter")
+            self.root.geometry("800x600")
+
+        self.traces = traces
+        self.times = times
+        self.models = {
+            'Gaussian': gaussian,
+            'Lorentzian': lorentzian,
+        }
+        self.fitted_params = []
+        self.fit_results = []
+        
+        self.fig = plt.Figure(figsize=(6, 5), dpi=100)
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_xlabel('x')
+        self.ax.set_ylabel('y')
+
+        # Create widgets
+        self.create_widgets()
+        self.update_plot()
+        
+    def create_widgets(self):
+        """Create all GUI widgets for the fitter interface."""
+        # Create main frame for layout
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Create frame for plot
+        plot_frame = ttk.Frame(main_frame)
+        plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Create canvas for matplotlib figure
+        self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
+        self.canvas_widget = self.canvas.get_tk_widget()
+        self.canvas_widget.pack(fill=tk.BOTH, expand=True)
+
+        # Add toolbar
+        toolbar_frame = ttk.Frame(plot_frame)
+        toolbar_frame.pack(fill=tk.X)
+        toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
+        toolbar.update()
+
+        # Create sidebar frame
+        sidebar_frame = ttk.Frame(main_frame, width=200)
+        sidebar_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5)
+
+        # Add model selection
+        model_select_frame = ttk.LabelFrame(sidebar_frame, text="Model Selection")
+        model_select_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        self.model_var = tk.StringVar(value='Gaussian')
+        for model_name in self.models.keys():
+            rb = ttk.Radiobutton(model_select_frame, text=model_name, variable=self.model_var, value=model_name)
+            rb.pack(anchor=tk.W, padx=5, pady=2)
+
+        # Add fit button
+        fit_btn = ttk.Button(sidebar_frame, text="Fit Traces", command=self.fit_traces)
+        fit_btn.pack(pady=5, padx=5)
+    
+    def update_plot(self):
+        self.ax.clear()
+        self.ax.plot(self.times, self.traces[0], label='Original Trace', color='blue')
+        self.canvas.draw()
+    
+    def fit_traces(self):
+        ...    
 
 class UtilityLinePlotter:
     def __init__(self, master=None):
