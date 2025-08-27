@@ -20,7 +20,7 @@ The entry in the text box at the top determines the group name in the target fil
 
 ## Generate Traces from Datset
 
-This feature is meant to generate a new HDF5 file with a 'Traces' group that uses the necessary format for `Plot Map with Trace Data`. It can be applied to any 2D or 3D HDF5 dataset or .npy array. 
+This feature is meant to generate a new HDF5 file with a 'Traces' group that uses the necessary format for `Plot Map with Trace Data`. It can be applied to any 2D or 3D HDF5 dataset or .npy array. Aside from the traces group, a Data group is also generated. It contains a dataset with the mean values of the traces and is generated because it is required by the plotter.  
 
 1. Open the feature by clicking `File` > `Generate Traces from Dataset`
 
