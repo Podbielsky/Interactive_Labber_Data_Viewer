@@ -26,8 +26,8 @@ def data_menu_bar(root, hdf5data):
     file.add_command(label='Create a HDF5 File from Numpy Files', command=lambda : create_hdf5_files_from_npy(root))
     file.add_command(label='Remove Selected Datasets', command=lambda: remove_selected_options_window(root, hdf5data)) #Hannah Vogel: to select datasets to be removed
     file.add_separator()
-    file.add_command(label='Add traces from HDF5 File', command=lambda: add_traces_window(hdf5data)) # Nico Reinders: to add traces to current file from another HDF5 file
-    file.add_command(label='Generate traces from dataset', command=lambda: transform_traces_window(hdf5data)) # Nico Reinders: create a file with a 'Traces' group that is compatible with the interactive data viewer 
+    file.add_command(label='Add Traces from HDF5 File', command=lambda: add_traces_window(hdf5data)) # Nico Reinders: to add traces to current file from another HDF5 file
+    file.add_command(label='Generate Traces from Dataset', command=lambda: transform_traces_window(hdf5data)) # Nico Reinders: create a file with a 'Traces' group that is compatible with the interactive data viewer 
     
     data = tk.Menu(menubar, tearoff=0)
     menubar.add_cascade(label='Data', menu=data)
@@ -163,21 +163,25 @@ def transform_traces_window(hdf5Data):
         print("No file selected. Operation cancelled.")
         return
     root, ext = os.path.splitext(pth)
-
-    if ext == 'hdf5':
+    if ext == '.hdf5':
+        print('hdf5')
         reshape_hdf5Data = HDF5Data(wdir=pth)
         reshape_hdf5Data.set_path(pth, 'r')
         # Open file and keep it open for the window lifetime
         reshape_hdf5Data.file = h5py.File(pth, 'r')
-    else: 
-        arr = np.load(pth)
+    elif ext == '.npy':
+        print('npy') 
+        arr = np.load(pth, allow_pickle=True)
         print("Select axis numpy file for traces if needed.")
         axis_path = filedialog.askopenfilename(filetypes=[("Numpy files", "*.npy")])
         if not axis_path:
             axis_arr = None
         else: 
-            axis_arr = np.load(axis_path)
-
+            axis_arr = np.load(axis_path, allow_pickle=True)
+    else:
+        messagebox.showerror("Invalid File", "Please select a valid HDF5 or Numpy (.npy) file.")
+        return
+    
     def check_axis_reshape_requirements(selected_item):
         # Check if the selected item is a valid dataset as x-axis for traces
         if not isinstance(selected_item, h5py.Dataset):
@@ -241,7 +245,7 @@ def transform_traces_window(hdf5Data):
     label_frame.pack(anchor='w', pady=5, padx=5, fill='x')
 
     # Store the valid datasets and axis datasets in dictionaries
-    if ext == 'hdf5':
+    if ext == '.hdf5':
         dataset_map = {}
         axis_map = {}
         file = reshape_hdf5Data.file
@@ -283,7 +287,7 @@ def transform_traces_window(hdf5Data):
         tk.Label(label_frame, text="Selected Dataset:").grid(row=0, column=0, padx=10, pady=5, sticky='e')
         tk.Label(label_frame, text="Selected Axis Dataset:").grid(row=1, column=0, padx=10, pady=5, sticky='e')
     else:
-        tk.Label(label_frame, text=f"Numpy file shape: {arr.shape}")
+        tk.Label(label_frame, text=f"Numpy file shape: {arr.shape}").pack(anchor='w')
     # Frame for spinbox + label
     spin_frame = tk.Frame(transform_options)
     
@@ -308,14 +312,14 @@ def transform_traces_window(hdf5Data):
     # add a spinbox to select the dimension that will be used as trace length
     tk.Spinbox(spin_frame, from_=0, to=2, increment=1, width=5, textvariable=dimension_index,validate="key", validatecommand=vcmd).pack(side='left')
 
-    if ext == 'hdf5':
+    if ext == '.hdf5':
         on_var_change()  # Initial call to set labels
 
     # Buttons frame
     button_frame = tk.Frame(transform_options)
     button_frame.pack(pady=10)
 
-    if ext == 'hdf5':
+    if ext == '.hdf5':
         confirm_button = tk.Button(
             button_frame,
             text="Confirm Reshape",
