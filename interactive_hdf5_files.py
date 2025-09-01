@@ -154,7 +154,6 @@ def add_traces_window(hdf5Data):
     copy_button = tk.Button(traces_selection_window, text="Copy Selected Dataset(s)", command=copy_selected_dataset)
     copy_button.pack(pady=10)
     
-        
 
 # Hannah Vogel
 # Modified by H.D to additionly handle whole folders instead of single files

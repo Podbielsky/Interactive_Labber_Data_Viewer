@@ -361,8 +361,15 @@ class HDF5Data:
                 self.set_array_tags()
             if self.measure_dim is None:
                 self.set_measure_dim()
+
+            # Check if 'Channels' exists in the file before accessing it
             if self.channels is None:
-                self.channels = self.file['Channels']
+                if 'Channels' in self.file:
+                    self.channels = self.file['Channels']
+                else:
+                    # Initialize as empty if 'Channels' doesn't exist
+                    self.channels = []
+
             self.complete_status()
             # Calculate the expected shape of the arrays
             should_array_shape = (int(self.measure_dim[0]), int(np.prod(np.array(self.measure_dim)[1:])))
@@ -377,13 +384,16 @@ class HDF5Data:
 
             # Create a dictionary to store channel parameters for all channels
             channel_params = {}
-            for channel in self.channels:
-                channel_name = channel['name']
-                channel_params[channel_name] = {
-                    'gain': channel['gain'],
-                    'offset': channel['offset'],
-                    'amp': channel['amp']
-                }
+            # Only process channels if they exist
+            if len(self.channels) > 0:
+                for channel in self.channels:
+                    channel_name = channel['name']
+                    channel_params[channel_name] = {
+                        'gain': channel['gain'],
+                        'offset': channel['offset'],
+                        'amp': channel['amp']
+                    }
+                print(channel_params)
 
             for name in array_tags_names:
                 index = array_tags_names.index(name)
@@ -435,8 +445,6 @@ class HDF5Data:
             name_data = None
             measurement_axis = None
             name_axis = None
-            self.arrays = None
-            self.array_tags = None
         except Exception as e:
             print(f"Error dividing measurement into data and axis : {e}")
 
