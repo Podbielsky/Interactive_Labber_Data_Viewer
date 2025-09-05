@@ -994,17 +994,17 @@ class InteractiveArrayPlotter:
 
     def fit_traces(self):
         
-        if not self.loaded:
-            print('fetching data...')
-            self.data.set_traces()
-            self.data.set_traces_dt()
-            self.traces = self.data.traces
-            self.times = self.data.traces_dt * np.arange(0, len(self.traces[0][0]))
-            self.loaded = True
-            print(self.traces.shape)
-            self.traces = np.reshape(self.traces, (-1, self.traces.shape[2]))
-            print(self.traces.shape)
-        traces_fitter = TracesFitter(self.traces, self.times, self.root)
+        # if not self.loaded:
+        #     print('fetching data...')
+        #     self.data.set_traces()
+        #     self.data.set_traces_dt()
+        #     self.traces = self.data.traces
+        #     self.times = self.data.traces_dt * np.arange(0, len(self.traces[0][0]))
+        #     self.loaded = True
+        #     print(self.traces.shape)
+        #     self.traces = np.reshape(self.traces, (-1, self.traces.shape[2]))
+        #     print(self.traces.shape)
+        traces_fitter = TracesFitter(self.data, self.root)
         
     
 
@@ -2213,8 +2213,9 @@ class InteractiveTimeTraceMapPlotter(InteractiveArrayPlotter):
         super().__init__(root, hdf5data)
 
 class TracesFitter:
-    def __init__(self, traces, times, master=None):
+    def __init__(self, data, master=None):
         
+        self.trace_index = 0
         
         if master is None:
             self.root = tk.Tk()
@@ -2224,12 +2225,11 @@ class TracesFitter:
             self.root = tk.Toplevel(master)
             self.root.title("Traces Fitter")
             self.root.geometry("800x600")
-
-        self.traces = traces
-        self.times = times
+        
+        self.data = data
         self.models = {
-            'Gaussian': gaussian,
-            'Lorentzian': lorentzian,
+            'G': [gaussian, ('x', 'a', 'mu', 'sigma')],
+            'L': [lorentzian, ('x', 'a', 'x0', 'gamma', 'c')]
         }
         self.fitted_params = []
         self.fit_results = []
@@ -2264,26 +2264,115 @@ class TracesFitter:
         toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
         toolbar.update()
 
-        # Create sidebar frame
-        sidebar_frame = ttk.Frame(main_frame, width=200)
-        sidebar_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5)
+        # Create model definition frame
+        model_frame = ttk.Frame(main_frame, width=200)
+        model_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5)
 
-        # Add model selection
-        model_select_frame = ttk.LabelFrame(sidebar_frame, text="Model Selection")
-        model_select_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        ttk.Label(model_frame, text="Model Expression:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        model_expr_var = tk.StringVar(value="a*x + b")  # Default is a linear model
+        model_expr_entry = ttk.Entry(model_frame, textvariable=model_expr_var, width=30)
+        model_expr_entry.grid(row=0, column=1, padx=5, pady=5)
 
-        self.model_var = tk.StringVar(value='Gaussian')
-        for model_name in self.models.keys():
-            rb = ttk.Radiobutton(model_select_frame, text=model_name, variable=self.model_var, value=model_name)
-            rb.pack(anchor=tk.W, padx=5, pady=2)
+        ttk.Label(model_frame, text="Example: a*np.exp(-x/b) + c").grid(row=1, column=0, columnspan=2, sticky=tk.W,
+                                                                        padx=5)
 
-        # Add fit button
-        fit_btn = ttk.Button(sidebar_frame, text="Fit Traces", command=self.fit_traces)
-        fit_btn.pack(pady=5, padx=5)
+        # Parameter frame
+        param_frame = ttk.LabelFrame(model_frame, text="Initial Parameters")
+        param_frame.grid(row=2, column=0, columnspan=2, sticky=tk.NSEW, padx=5, pady=10)
+        
+        # Default parameters (a and b for linear model)
+        param_vars = {}
+        param_entries = {}
+
+        dist_vars = {}
+        dist_entries = {}
+
+        # Initial parameters for default linear model
+        param_vars['a'] = tk.DoubleVar(value=1.0)
+        param_vars['b'] = tk.DoubleVar(value=0.0)
+
+        ttk.Label(param_frame, text="a:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        param_entries['a'] = ttk.Entry(param_frame, textvariable=param_vars['a'], width=10)
+        param_entries['a'].grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(param_frame, text="b:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        param_entries['b'] = ttk.Entry(param_frame, textvariable=param_vars['b'], width=10)
+        param_entries['b'].grid(row=1, column=1, padx=5, pady=5)
+
+        # Function to update parameters when the model expression changes
+        def update_params(*args):
+            # Clear existing parameter entries
+            for widget in param_frame.winfo_children():
+                widget.destroy()
+
+            # Extract parameter names from the expression
+            expr = model_expr_var.get()
+            params = set()
+            dists = set()
+            
+            import re
+            for match in re.finditer(r'\b([a-zA-Z](?!\w*\())\b', expr):
+                param = match.group(1)
+                if param not in {'x', 'np', 'co', 'sp', 'L', 'G'}:  # Skip x variable, numpy, and L/G
+                    params.add(param)
+            for match in re.finditer(r"([LG]\d+)", expr):
+                dist = match.group(1)
+                dists.add(dist)
+
+            # Create entries for each parameter
+            param_vars.clear()
+            param_entries.clear()
+            dist_vars.clear()
+            dist_entries.clear()
+            # Create separate frames for parameters and distributions
+            param_subframe = ttk.Frame(param_frame)
+            param_subframe.grid(row=0, column=0, columnspan=2, sticky=tk.NSEW)
+
+            dist_subframe = ttk.Frame(param_frame)
+            dist_subframe.grid(row=1, column=0, columnspan=2, sticky=tk.NSEW)
+
+            # Clear and populate parameter entries
+            for widget in param_subframe.winfo_children():
+                widget.destroy()
+            for i, param in enumerate(sorted(params)):
+                param_vars[param] = tk.DoubleVar(value=1.0)
+                ttk.Label(param_subframe, text=f"{param}:").grid(row=i, column=0, sticky=tk.W, padx=5, pady=5)
+                param_entries[param] = ttk.Entry(param_subframe, textvariable=param_vars[param], width=10)
+                param_entries[param].grid(row=i, column=1, padx=5, pady=5)
+
+            # Clear and populate distribution entries
+            for widget in dist_subframe.winfo_children():
+                widget.destroy()
+            for i, dist in enumerate(sorted(dists)):
+                dist_params = self.models[dist[0]][1]
+                dist_vars[dist] = [tk.DoubleVar(value=1.0) for _ in dist_params[1:]]  # Skip 'x' variable
+                
+                ttk.Label(dist_subframe, text=f"{dist}: ").grid(row=i, column=0, sticky=tk.W, padx=5, pady=5)
+                for j, param in enumerate(dist_params[1:]):
+                    ttk.Label(dist_subframe, text=f"{param}:").grid(row=i, column=2*j+1, sticky=tk.W, padx=5, pady=5)
+                
+                dist_entries[param] = [ttk.Entry(dist_subframe, textvariable=dist_vars[dist][j], width=10).grid(row=i, column=2*j+2, padx=5, pady=5) for j, param in enumerate(dist_params[1:])]
+                
+            # print(dist_vars)
+
+        # Bind the model expression entry to update parameters
+        model_expr_var.trace_add("write", update_params)
+        
+
+        # Add fit buttons
+        start_btn = ttk.Button(model_frame, text="Start Fit", command=self.fit_traces)
+        start_btn.grid(row=3, column=0, columnspan=2, pady=5, padx=5)
+        stop_btn = ttk.Button(model_frame, text="Stop Fit", command=lambda: print("Stop Fit clicked"))
+        stop_btn.grid(row=4, column=0, columnspan=2, pady=5, padx=5)
+        restart_btn = ttk.Button(model_frame, text="Restart Fit", command=lambda: print("Restart Fit clicked"))
+        restart_btn.grid(row=5, column=0, columnspan=2, pady=5, padx=5)
     
     def update_plot(self):
+        self.trace_selected = self.data.trace_reference[::, 0, self.trace_index]
+        self.times = self.data.traces_dt * np.arange(0, len(self.trace_selected))
+        
         self.ax.clear()
-        self.ax.plot(self.times, self.traces[0], label='Original Trace', color='blue')
+        self.ax.plot(self.times, self.trace_selected, label='Original Trace', color='blue')
         self.canvas.draw()
     
     def fit_traces(self):
