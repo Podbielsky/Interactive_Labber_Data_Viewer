@@ -361,8 +361,12 @@ class HDF5Data:
                 self.set_array_tags()
             if self.measure_dim is None:
                 self.set_measure_dim()
+            # Handle missing 'Channels' gracefully
             if self.channels is None:
-                self.channels = self.file['Channels']
+                if 'Channels' in self.file:
+                    self.channels = self.file['Channels']
+                else:
+                    self.channels = None
             self.complete_status()
             # Calculate the expected shape of the arrays
             should_array_shape = (int(self.measure_dim[0]), int(np.prod(np.array(self.measure_dim)[1:])))
@@ -375,15 +379,16 @@ class HDF5Data:
             measurement_axis = []
             name_axis = []
 
-            # Create a dictionary to store channel parameters for all channels
+            # Create a dictionary to store channel parameters for all channels, if channels exist
             channel_params = {}
-            for channel in self.channels:
-                channel_name = channel['name']
-                channel_params[channel_name] = {
-                    'gain': channel['gain'],
-                    'offset': channel['offset'],
-                    'amp': channel['amp']
-                }
+            if self.channels is not None:
+                for channel in self.channels:
+                    channel_name = channel['name']
+                    channel_params[channel_name] = {
+                        'gain': channel['gain'],
+                        'offset': channel['offset'],
+                        'amp': channel['amp']
+                    }
 
             for name in array_tags_names:
                 index = array_tags_names.index(name)
@@ -400,7 +405,7 @@ class HDF5Data:
 
                 # Process the array with the formula if channel parameters exist
                 processed_array = target_array
-                if name in channel_params:
+                if channel_params and name in channel_params:
                     params = channel_params[name]
                     gain = params['gain']
                     offset = params['offset']
