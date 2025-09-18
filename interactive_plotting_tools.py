@@ -2224,7 +2224,7 @@ class TracesFitter:
         else:
             self.root = tk.Toplevel(master)
             self.root.title("Traces Fitter")
-            self.root.geometry("800x600")
+            # self.root.geometry("800x600")
         
         self.data = data
         self.models = {
@@ -2260,13 +2260,18 @@ class TracesFitter:
 
         # Add toolbar
         toolbar_frame = ttk.Frame(plot_frame)
-        toolbar_frame.pack(fill=tk.X)
+        toolbar_frame.pack(fill=tk.X, expand=True)
         toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
         toolbar.update()
 
         # Create model definition frame
         model_frame = ttk.Frame(main_frame, width=200)
-        model_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5)
+        model_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5, expand=True)
+
+        # Add fit results text box
+        self.fit_results_text = tk.Text(model_frame, height=10, width=30, wrap=tk.WORD)
+        self.fit_results_text.grid(row=7, column=0, columnspan=2, sticky=tk.NSEW, padx=5, pady=5)
+        self.fit_results_text.config(state=tk.DISABLED)
 
         ttk.Label(model_frame, text="Model Expression:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self.model_expr_var = tk.StringVar(value="a*x + b")  # Default is a linear model
@@ -2298,6 +2303,15 @@ class TracesFitter:
         ttk.Label(param_frame, text="b:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
         param_entries['b'] = ttk.Entry(param_frame, textvariable=self.param_vars['b'], width=10)
         param_entries['b'].grid(row=1, column=1, padx=5, pady=5)
+
+        # Add maxfev entry
+        self.maxfev_var = tk.IntVar(value=2200)
+        ttk.Label(model_frame, text="Max Function Evaluations (maxfev):").grid(row=6, column=0, sticky=tk.W, padx=5, pady=5)
+        maxfev_entry = ttk.Entry(model_frame, textvariable=self.maxfev_var, width=10)
+        maxfev_entry.grid(row=6, column=1, padx=5, pady=5)
+        
+        self.root.update()  
+        self.root.minsize(self.root.winfo_width(), self.root.winfo_height())
 
         # Function to update parameters when the model expression changes
         def update_params(*args):
@@ -2352,8 +2366,7 @@ class TracesFitter:
                     ttk.Label(dist_subframe, text=f"{param}:").grid(row=i, column=2*j+1, sticky=tk.W, padx=5, pady=5)
                 
                 dist_entries[param] = [ttk.Entry(dist_subframe, textvariable=self.dist_vars[dist][j], width=10).grid(row=i, column=2*j+2, padx=5, pady=5) for j, param in enumerate(dist_params[1:])]
-                
-            # print(dist_vars)
+            
 
         # Bind the model expression entry to update parameters
         self.model_expr_var.trace_add("write", update_params)
@@ -2362,10 +2375,6 @@ class TracesFitter:
         # Add fit buttons
         start_btn = ttk.Button(model_frame, text="Start Fit", command=self.fit_traces)
         start_btn.grid(row=3, column=0, columnspan=2, pady=5, padx=5)
-        stop_btn = ttk.Button(model_frame, text="Stop Fit", command=lambda: print("Stop Fit clicked"))
-        stop_btn.grid(row=4, column=0, columnspan=2, pady=5, padx=5)
-        restart_btn = ttk.Button(model_frame, text="Restart Fit", command=lambda: print("Restart Fit clicked"))
-        restart_btn.grid(row=5, column=0, columnspan=2, pady=5, padx=5)
     
     def update_plot(self):
         self.trace_selected = self.data.trace_reference[::, 0, self.trace_index]
@@ -2423,7 +2432,8 @@ class TracesFitter:
         # Fit the model
         from scipy import optimize
         x_data, y_data = self.times, self.trace_selected
-        popt, pcov = optimize.curve_fit(model_func, x_data, y_data, p0=p0)
+        maxfev = self.maxfev_var.get()
+        popt, pcov = optimize.curve_fit(model_func, x_data, y_data, p0=p0, maxfev=maxfev)
 
         # Fit results
         fit_params = {param: val for param, val in zip(all_param_names, popt)}
@@ -2437,12 +2447,14 @@ class TracesFitter:
         self.ax.plot(x_data, fit_y, label='Fitted Curve', color='red', linestyle='--')
         self.canvas.draw()
 
-        # Show the fitted parameters
+        # Show the fitted parameters in the persistent text box
         result_text = "Fitted parameters:\n"
         for param, value in fit_params.items():
             result_text += f"{param} = {value:.6g}\n"
-        messagebox.showinfo("Fit Results", result_text)
-
+        self.fit_results_text.config(state=tk.NORMAL)
+        self.fit_results_text.delete(1.0, tk.END)
+        self.fit_results_text.insert(tk.END, result_text)
+        self.fit_results_text.config(state=tk.DISABLED)
 
         # except Exception as e:
         #     messagebox.showerror("Fit Error", f"Error fitting model: {str(e)}")
