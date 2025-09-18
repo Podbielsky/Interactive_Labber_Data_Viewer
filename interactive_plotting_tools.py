@@ -2386,48 +2386,39 @@ class TracesFitter:
         # Create the model function
         # Order of arguments: x, params, [G1a, G1mu, G1sigma], [L1a, L1x0, L1gamma, L1c], ...
         def model_func(x, *args):
-            # Create a namespace with parameters assigned to their values
-            param_dict = {name: value for name, value in zip(params.keys(), args)}
-            # Add x to the namespace
+            # Map args to parameter names in the order used for curve_fit
+            param_names = list(params.keys())
+            dist_param_names = []
+            for dist in sorted(dist_params.keys()):
+                dist_param_names.extend([f"{dist}_{param}" for param in self.models[dist[0]][1][1:]])
+            all_param_names = param_names + dist_param_names
+
+            # Build param_dict from args
+            param_dict = {name: value for name, value in zip(all_param_names, args)}
             param_dict['x'] = x
-            # Add numpy functions
             param_dict['np'] = np
-            #  Add scipy.constants
             param_dict['co'] = co
-            
-            dist_dict = {}
-            # Build dist_dict using dist_vars to ensure all required keys are present
-            for dist in dist_params:
-                param_names = self.models[dist[0]][1][1:]  # skip 'x'
-                values = dist_params[dist]
-                for value, param in zip(values, param_names):
-                    dist_dict[f"{dist}_{param}"] = value
 
-            # for dist in dist_params:
-            #     dist_values = self.dist_vars[dist]
-            #     dist_func = self.models[dist[0]][0]
-            #     param_dict[dist] = dist_func(param_dict['x'], *[var.get() for var in dist_values])
-            
-                    
-            # Update param_dict with dist_dict
-            param_dict.update(dist_dict)
-            # Add distribution functions (L1, G1, etc.) as callables to param_dict
-            for dist in dist_params:
+            # Add distribution functions (L1, G1, etc.) as callables to param_dict, using fit parameters
+            for dist in sorted(dist_params.keys()):
                 dist_func = self.models[dist[0]][0]
-                dist_param_names = self.models[dist[0]][1][1:]  # skip 'x'
-
-                dist_values = [dist_dict[f"{dist}_{param}"] for param in dist_param_names]
-                # Add as a lambda: e.g. param_dict['L1'] = lambda x: lorentzian(x, *dist_values)
+                dist_param_names_local = self.models[dist[0]][1][1:]  # skip 'x'
+                dist_values = [param_dict[f"{dist}_{param}"] for param in dist_param_names_local]
                 param_dict[dist] = (lambda dist_func=dist_func, dist_values=dist_values: lambda x: dist_func(x, *dist_values))()
-            # Evaluate the expression
+
             return eval(expr, {"__builtins__": {}}, param_dict)
 
+        # Build parameter name list in the exact order used for curve_fit
+        param_names = list(params.keys())
+        dist_param_names = []
+        for dist in sorted(dist_params.keys()):
+            dist_param_names.extend([f"{dist}_{param}" for param in self.models[dist[0]][1][1:]])
+        all_param_names = param_names + dist_param_names
+
         # Initial parameter values
-        p0 = [params[param] for param in sorted(params.keys())]
+        p0 = [params[param] for param in param_names]
         for dist in sorted(dist_params.keys()):
             p0.extend(dist_params[dist])
-        params.update({f"{dist}_{param}": val for dist in dist_params for param, val in zip(self.models[dist[0]][1][1:], dist_params[dist])})    
-        
 
         # Fit the model
         from scipy import optimize
@@ -2435,7 +2426,7 @@ class TracesFitter:
         popt, pcov = optimize.curve_fit(model_func, x_data, y_data, p0=p0)
 
         # Fit results
-        fit_params = {param: val for param, val in zip(sorted(params.keys()), popt)}
+        fit_params = {param: val for param, val in zip(all_param_names, popt)}
         
 
         # Generate fitted curve
