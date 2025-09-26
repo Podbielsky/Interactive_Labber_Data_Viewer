@@ -23,6 +23,7 @@ from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data
                                           skewed_gaussian_func_shape, beta_func_shape, trace_wise_min_max_scaling, lorentzian, gaussian)
 from gamma_map import (get_t_rates, get_fourier, fft_correction_select, fft_correction_apply, get_cuts)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap
+from scipy import optimize
 neon_cmap = make_neon_cyclic_colormap()
 bi_map = make_bi_colormap() # take out
 plt.register_cmap(name='BiMap', cmap=bi_map)
@@ -389,7 +390,14 @@ class InteractiveArrayPlotter:
             try:
                 self.sliced_data = ((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
                     0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
+            except ValueError:
+                if hasattr(self.traces_fitter, 'fit_results_dict') and self.data_combobox.get() in self.traces_fitter.fit_results_dict:
+                    print(self.traces_fitter.fit_results_dict.keys())
+                    self.sliced_data = (self.traces_fitter.fit_results_dict[self.data_combobox.get()]).reshape(np.flip(self.data.measure_dim))
+                    print('Using fit results for plotting.')
+
             except IndexError:
+                
                 if not self.loaded:
                     print('fetching data...')
                     self.data.set_traces()
@@ -411,6 +419,7 @@ class InteractiveArrayPlotter:
                     self.sliced_data = self.gamma_up
                 elif self.data_combobox.get() == "Tunneling rates out":
                     self.sliced_data = self.gamma_down
+                
 
             self.ax.clear()
             self.xlim = (np.min(self.X), np.max(self.X))
@@ -992,19 +1001,27 @@ class InteractiveArrayPlotter:
         self.data_axis_transform_naming_frame.pack(side=tk.LEFT)
         self.data_axis_transform_scaling_frame.pack(side=tk.RIGHT)
 
+
+    def make_params_viewable(self):
+        self.traces_fitter.fit_all_traces()
+        self.fit_results_dict = self.traces_fitter.fit_results_dict
+        # Update the global data_combobox with parameter names from fit_results_dict
+        current_values = list(self.data_combobox['values'])
+        for param in self.fit_results_dict.keys():
+            if param not in current_values:
+                current_values.append(param)
+        self.data_combobox['values'] = current_values
+    
     def fit_traces(self):
-        
-        # if not self.loaded:
-        #     print('fetching data...')
-        #     self.data.set_traces()
-        #     self.data.set_traces_dt()
-        #     self.traces = self.data.traces
-        #     self.times = self.data.traces_dt * np.arange(0, len(self.traces[0][0]))
-        #     self.loaded = True
-        #     print(self.traces.shape)
-        #     self.traces = np.reshape(self.traces, (-1, self.traces.shape[2]))
-        #     print(self.traces.shape)
-        traces_fitter = TracesFitter(self.data, self.root)
+
+        self.traces_fitter = TracesFitter(self.data, self.root)
+        self.traces_fitter.create_widgets()
+        run_btn = ttk.Button(self.traces_fitter.model_frame, text="Run on all Traces", command=self.make_params_viewable)
+        run_btn.grid(row=3, column=1, columnspan=2, pady=5, padx=5)
+        self.traces_fitter.update_plot()
+
+
+       
         
     
 
@@ -2239,9 +2256,6 @@ class TracesFitter:
         self.ax.set_xlabel('x')
         self.ax.set_ylabel('y')
 
-        # Create widgets
-        self.create_widgets()
-        self.update_plot()
         
     def create_widgets(self):
         """Create all GUI widgets for the fitter interface."""
@@ -2265,24 +2279,24 @@ class TracesFitter:
         toolbar.update()
 
         # Create model definition frame
-        model_frame = ttk.Frame(main_frame, width=200)
-        model_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5, expand=True)
+        self.model_frame = ttk.Frame(main_frame, width=200)
+        self.model_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5, expand=True)
 
         # Add fit results text box
-        self.fit_results_text = tk.Text(model_frame, height=10, width=30, wrap=tk.WORD)
+        self.fit_results_text = tk.Text(self.model_frame, height=10, width=30, wrap=tk.WORD)
         self.fit_results_text.grid(row=7, column=0, columnspan=2, sticky=tk.NSEW, padx=5, pady=5)
         self.fit_results_text.config(state=tk.DISABLED)
 
-        ttk.Label(model_frame, text="Model Expression:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(self.model_frame, text="Model Expression:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self.model_expr_var = tk.StringVar(value="a*x + b")  # Default is a linear model
-        model_expr_entry = ttk.Entry(model_frame, textvariable=self.model_expr_var, width=30)
+        model_expr_entry = ttk.Entry(self.model_frame, textvariable=self.model_expr_var, width=30)
         model_expr_entry.grid(row=0, column=1, padx=5, pady=5)
 
-        ttk.Label(model_frame, text="Example: a*np.exp(-x/b) + c").grid(row=1, column=0, columnspan=2, sticky=tk.W,
+        ttk.Label(self.model_frame, text="Example: a*np.exp(-x/b) + c").grid(row=1, column=0, columnspan=2, sticky=tk.W,
                                                                         padx=5)
 
         # Parameter frame
-        param_frame = ttk.LabelFrame(model_frame, text="Initial Parameters")
+        param_frame = ttk.LabelFrame(self.model_frame, text="Initial Parameters")
         param_frame.grid(row=2, column=0, columnspan=2, sticky=tk.NSEW, padx=5, pady=10)
         
         # Default parameters (a and b for linear model)
@@ -2306,8 +2320,8 @@ class TracesFitter:
 
         # Add maxfev entry
         self.maxfev_var = tk.IntVar(value=2200)
-        ttk.Label(model_frame, text="Max Function Evaluations (maxfev):").grid(row=6, column=0, sticky=tk.W, padx=5, pady=5)
-        maxfev_entry = ttk.Entry(model_frame, textvariable=self.maxfev_var, width=10)
+        ttk.Label(self.model_frame, text="Max Function Evaluations (maxfev):").grid(row=6, column=0, sticky=tk.W, padx=5, pady=5)
+        maxfev_entry = ttk.Entry(self.model_frame, textvariable=self.maxfev_var, width=10)
         maxfev_entry.grid(row=6, column=1, padx=5, pady=5)
         
         self.root.update()  
@@ -2373,8 +2387,9 @@ class TracesFitter:
         
 
         # Add fit buttons
-        start_btn = ttk.Button(model_frame, text="Start Fit", command=self.fit_traces)
-        start_btn.grid(row=3, column=0, columnspan=2, pady=5, padx=5)
+        preview_btn = ttk.Button(self.model_frame, text="Fit Preview", command=self.fit_preview_trace)
+        preview_btn.grid(row=3, column=0, columnspan=2, pady=5, padx=5)
+        
     
     def update_plot(self):
         self.trace_selected = self.data.trace_reference[::, 0, self.trace_index]
@@ -2384,14 +2399,14 @@ class TracesFitter:
         self.ax.plot(self.times, self.trace_selected, label='Original Trace', color='blue')
         self.canvas.draw()
     
-    def fit_traces(self):
-        # try:
+    def fit_preview_trace(self):
+        import time
+        start_time = time.perf_counter()
         # Get the model expression and parameter values
         expr = self.model_expr_var.get()
         params = {param: var.get() for param, var in self.param_vars.items()}
         dist_params = {dist: [var.get() for var in vars_list] for dist, vars_list in self.dist_vars.items()}
-        
-        
+
         # Create the model function
         # Order of arguments: x, params, [G1a, G1mu, G1sigma], [L1a, L1x0, L1gamma, L1c], ...
         def model_func(x, *args):
@@ -2417,12 +2432,14 @@ class TracesFitter:
 
             return eval(expr, {"__builtins__": {}}, param_dict)
 
+        self.model_func = model_func  # Store the model function for later use
+
         # Build parameter name list in the exact order used for curve_fit
         param_names = list(params.keys())
         dist_param_names = []
         for dist in sorted(dist_params.keys()):
             dist_param_names.extend([f"{dist}_{param}" for param in self.models[dist[0]][1][1:]])
-        all_param_names = param_names + dist_param_names
+        self.all_param_names = param_names + dist_param_names
 
         # Initial parameter values
         p0 = [params[param] for param in param_names]
@@ -2430,14 +2447,14 @@ class TracesFitter:
             p0.extend(dist_params[dist])
 
         # Fit the model
-        from scipy import optimize
         x_data, y_data = self.times, self.trace_selected
-        maxfev = self.maxfev_var.get()
-        popt, pcov = optimize.curve_fit(model_func, x_data, y_data, p0=p0, maxfev=maxfev)
+        self.maxfev = self.maxfev_var.get()
+        popt, pcov = optimize.curve_fit(model_func, x_data, y_data, p0=p0, maxfev=self.maxfev)
+        end_time = time.perf_counter()
+        elapsed = end_time - start_time
 
         # Fit results
-        fit_params = {param: val for param, val in zip(all_param_names, popt)}
-        
+        self.fit_params = {param: val for param, val in zip(self.all_param_names, popt)}
 
         # Generate fitted curve
         fit_y = model_func(x_data, *popt)
@@ -2449,18 +2466,49 @@ class TracesFitter:
 
         # Show the fitted parameters in the persistent text box
         result_text = "Fitted parameters:\n"
-        for param, value in fit_params.items():
+        for param, value in self.fit_params.items():
             result_text += f"{param} = {value:.6g}\n"
+        result_text += f"\nFit time for preview trace: {elapsed:.3f} seconds\n"
+        # Estimate total time for all traces if possible
+        
+        num_traces = self.data.trace_reference.shape[2]
+        total_estimate = elapsed * num_traces
+        result_text += f"Estimated time for all traces: {total_estimate:.1f} seconds ({total_estimate/60:.1f} min)\n"
         self.fit_results_text.config(state=tk.NORMAL)
         self.fit_results_text.delete(1.0, tk.END)
         self.fit_results_text.insert(tk.END, result_text)
         self.fit_results_text.config(state=tk.DISABLED)
 
-        # except Exception as e:
-        #     messagebox.showerror("Fit Error", f"Error fitting model: {str(e)}")
+    def fit_all_traces(self):
+        self.fit_preview_trace()  # Fit the currently selected trace first to validate the model
 
-        
-        
+        fit_results = np.array([])
+        num_traces = self.data.trace_reference.shape[2]
+
+        # Create progress bar window
+        progress_win = tk.Toplevel(self.root)
+        progress_win.title("Fitting Progress")
+        progress_win.geometry("400x100")
+        progress_label = tk.Label(progress_win, text="Fitting traces...")
+        progress_label.pack(padx=20, pady=10)
+        progress_var = tk.DoubleVar()
+        progress_bar = ttk.Progressbar(progress_win, variable=progress_var, maximum=num_traces, length=350)
+        progress_bar.pack(padx=20, pady=20, fill=tk.X)
+
+        progress_win.update()  # Force window to appear before starting loop
+        for i in range(num_traces):
+            x_data, y_data = self.times, self.trace_selected
+            p0 = [self.fit_params[param] for param in self.all_param_names]
+            popt, pcov = optimize.curve_fit(self.model_func, x_data, y_data, p0=p0, maxfev=self.maxfev)
+            fit_results = np.append(fit_results, popt)
+            # Update progress bar
+            progress_var.set(i + 1)
+            progress_win.update()  # Update window and progress bar
+
+        progress_win.destroy()
+        self.fit_results = fit_results.reshape(-1, len(self.all_param_names))
+        self.fit_results_dict = {param: self.fit_results[:, idx] for idx, param in enumerate(self.all_param_names)}
+        return self.fit_results_dict
         
         
 
