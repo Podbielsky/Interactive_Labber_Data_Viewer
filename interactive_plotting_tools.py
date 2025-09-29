@@ -2232,7 +2232,8 @@ import re
 class TracesFitter:
     def __init__(self, data, master=None):
         
-        self.trace_index = 0
+        self.trace_index_x = 0
+        self.trace_index_y = 0
         
         if master is None:
             self.root = tk.Tk()
@@ -2323,6 +2324,24 @@ class TracesFitter:
         ttk.Label(self.model_frame, text="Max Function Evaluations (maxfev):").grid(row=6, column=0, sticky=tk.W, padx=5, pady=5)
         maxfev_entry = ttk.Entry(self.model_frame, textvariable=self.maxfev_var, width=10)
         maxfev_entry.grid(row=6, column=1, padx=5, pady=5)
+    
+        
+        # Add spinboxes for selecting trace indices
+        ttk.Label(self.model_frame, text="Trace X Index:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=5)
+        self.trace_x_index_var = tk.IntVar(value=0) 
+        trace_x_spinbox = ttk.Spinbox(self.model_frame, from_=0, to=self.data.measure_dim[0]-1, textvariable=self.trace_x_index_var, width=10)
+        trace_x_spinbox.grid(row=4, column=1, padx=5, pady=5)
+        trace_x_spinbox.bind("<FocusOut>", lambda e: self.update_plot())
+        trace_x_spinbox.bind("<Return>", lambda e: self.update_plot())
+        
+        ttk.Label(self.model_frame, text="Trace Y Index:").grid(row=5, column=0, sticky=tk.W, padx=5, pady=5)
+        self.trace_y_index_var = tk.IntVar(value=0)
+        trace_y_spinbox = ttk.Spinbox(self.model_frame, from_=0, to=self.data.measure_dim[1]-1, textvariable=self.trace_y_index_var, width=10)
+        trace_y_spinbox.grid(row=5, column=1, padx=5, pady=5)
+        trace_y_spinbox.bind("<FocusOut>", lambda e: self.update_plot())
+        trace_y_spinbox.bind("<Return>", lambda e: self.update_plot())
+        
+                
         
         self.root.update()  
         self.root.minsize(self.root.winfo_width(), self.root.winfo_height())
@@ -2389,14 +2408,28 @@ class TracesFitter:
         # Add fit buttons
         preview_btn = ttk.Button(self.model_frame, text="Fit Preview", command=self.fit_preview_trace)
         preview_btn.grid(row=3, column=0, columnspan=2, pady=5, padx=5)
+    
+    def get_one_index(self, trace_index_x, trace_index_y):
+        return self.data.measure_dim[1] * trace_index_x + trace_index_y
         
+        
+    def next_trace(self):
+        self.trace_index = self.get_one_index((self.trace_index + 1) % self.data.trace_reference.shape[2])
+        self.update_plot()    
+    
+    def prev_trace(self):
+        self.trace_index = self.get_one_index((self.trace_index - 1) % self.data.trace_reference.shape[2])
+        self.update_plot()
     
     def update_plot(self):
+        self.trace_index = self.get_one_index(self.trace_x_index_var.get(), self.trace_y_index_var.get())
         self.trace_selected = self.data.trace_reference[::, 0, self.trace_index]
         self.times = self.data.traces_dt * np.arange(0, len(self.trace_selected))
         
         self.ax.clear()
         self.ax.plot(self.times, self.trace_selected, label='Original Trace', color='blue')
+        if hasattr(self, 'fit_y'):
+            self.ax.plot(self.x_data, self.fit_y, label='Fitted Curve', color='red', linestyle='--')
         self.canvas.draw()
     
     def fit_preview_trace(self):
@@ -2447,9 +2480,9 @@ class TracesFitter:
             p0.extend(dist_params[dist])
 
         # Fit the model
-        x_data, y_data = self.times, self.trace_selected
+        self.x_data, self.y_data = self.times, self.trace_selected
         self.maxfev = self.maxfev_var.get()
-        popt, pcov = optimize.curve_fit(model_func, x_data, y_data, p0=p0, maxfev=self.maxfev)
+        popt, pcov = optimize.curve_fit(model_func, self.x_data, self.y_data, p0=p0, maxfev=self.maxfev)
         end_time = time.perf_counter()
         elapsed = end_time - start_time
 
@@ -2457,11 +2490,10 @@ class TracesFitter:
         self.fit_params = {param: val for param, val in zip(self.all_param_names, popt)}
 
         # Generate fitted curve
-        fit_y = model_func(x_data, *popt)
+        self.fit_y = model_func(self.x_data, *popt)
 
         # Add the fitted curve 
         self.update_plot()
-        self.ax.plot(x_data, fit_y, label='Fitted Curve', color='red', linestyle='--')
         self.canvas.draw()
 
         # Show the fitted parameters in the persistent text box
