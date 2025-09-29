@@ -2228,13 +2228,21 @@ class InteractiveTimeTraceMapPlotter(InteractiveArrayPlotter):
     def __init__(self, root, hdf5data):
 
         super().__init__(root, hdf5data)
+
+
 import re
 class TracesFitter:
+    """
+    A GUI application for fitting peak functions/distributions to 1D traces 
+    """
+
     def __init__(self, data, master=None):
         
+        # Initialize trace indices
         self.trace_index_x = 0
         self.trace_index_y = 0
         
+        # Set up the main window
         if master is None:
             self.root = tk.Tk()
             self.root.title("Traces Fitter")
@@ -2244,14 +2252,19 @@ class TracesFitter:
             self.root.title("Traces Fitter")
             # self.root.geometry("800x600")
         
+        
         self.data = data
+        
+        # Define available models
         self.models = {
             'G': [gaussian, ('x', 'a', 'mu', 'sigma')],
             'L': [lorentzian, ('x', 'a', 'x0', 'gamma', 'c')]
         }
-        self.fitted_params = []
-        self.fit_results = []
         
+        self.fitted_params = [] # Store fitted parameters
+        self.fit_results = [] # Store fit results
+        
+        # Create matplotlib figure and axis
         self.fig = plt.Figure(figsize=(6, 5), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.ax.set_xlabel('x')
@@ -2288,12 +2301,14 @@ class TracesFitter:
         self.fit_results_text.grid(row=7, column=0, columnspan=2, sticky=tk.NSEW, padx=5, pady=5)
         self.fit_results_text.config(state=tk.DISABLED)
 
+        # Model expression input
         ttk.Label(self.model_frame, text="Model Expression:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        self.model_expr_var = tk.StringVar(value="a*x + b")  # Default is a linear model
+        self.model_expr_var = tk.StringVar(value="a*x + b + G1(x)")  # Default is a linear model
         model_expr_entry = ttk.Entry(self.model_frame, textvariable=self.model_expr_var, width=30)
         model_expr_entry.grid(row=0, column=1, padx=5, pady=5)
 
-        ttk.Label(self.model_frame, text="Example: a*np.exp(-x/b) + c").grid(row=1, column=0, columnspan=2, sticky=tk.W,
+        # Example label
+        ttk.Label(self.model_frame, text="Example: a*np.exp(-x/b) + c + L1(x)").grid(row=1, column=0, columnspan=2, sticky=tk.W,
                                                                         padx=5)
 
         # Parameter frame
@@ -2311,6 +2326,7 @@ class TracesFitter:
         self.param_vars['a'] = tk.DoubleVar(value=1.0)
         self.param_vars['b'] = tk.DoubleVar(value=0.0)
 
+        # Add entries for default parameters
         ttk.Label(param_frame, text="a:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         param_entries['a'] = ttk.Entry(param_frame, textvariable=self.param_vars['a'], width=10)
         param_entries['a'].grid(row=0, column=1, padx=5, pady=5)
@@ -2341,8 +2357,7 @@ class TracesFitter:
         trace_y_spinbox.bind("<FocusOut>", lambda e: self.update_plot())
         trace_y_spinbox.bind("<Return>", lambda e: self.update_plot())
         
-                
-        
+        # Ensure the window is sized correctly before adding dynamic content
         self.root.update()  
         self.root.minsize(self.root.winfo_width(), self.root.winfo_height())
 
@@ -2358,7 +2373,7 @@ class TracesFitter:
             dists = set()
             
             
-            for match in re.finditer(r'\b([a-zA-Z](?!\w*\())\b', expr):
+            for match in re.finditer(r'\b([a-zA-Z](?!\w*\())\b', expr): # Match standalone variable names not followed by '('
                 param = match.group(1)
                 if param not in {'x', 'np', 'co', 'sp', 'L', 'G'}:  # Skip x variable, numpy, and L/G
                     params.add(param)
@@ -2371,6 +2386,7 @@ class TracesFitter:
             param_entries.clear()
             self.dist_vars.clear()
             dist_entries.clear()
+            
             # Create separate frames for parameters and distributions
             param_subframe = ttk.Frame(param_frame)
             param_subframe.grid(row=0, column=0, columnspan=2, sticky=tk.NSEW)
@@ -2409,30 +2425,29 @@ class TracesFitter:
         preview_btn = ttk.Button(self.model_frame, text="Fit Preview", command=self.fit_preview_trace)
         preview_btn.grid(row=3, column=0, columnspan=2, pady=5, padx=5)
     
-    def get_one_index(self, trace_index_x, trace_index_y):
+    def get_one_index(self, trace_index_x, trace_index_y): # Convert 2D indices to 1D index
         return self.data.measure_dim[1] * trace_index_x + trace_index_y
-        
-        
-    def next_trace(self):
-        self.trace_index = self.get_one_index((self.trace_index + 1) % self.data.trace_reference.shape[2])
-        self.update_plot()    
-    
-    def prev_trace(self):
-        self.trace_index = self.get_one_index((self.trace_index - 1) % self.data.trace_reference.shape[2])
-        self.update_plot()
-    
+            
     def update_plot(self):
+        """
+        Update the plot with the selected trace and fitted curve if available.
+        """
+        # Get the selected trace
         self.trace_index = self.get_one_index(self.trace_x_index_var.get(), self.trace_y_index_var.get())
         self.trace_selected = self.data.trace_reference[::, 0, self.trace_index]
         self.times = self.data.traces_dt * np.arange(0, len(self.trace_selected))
         
-        self.ax.clear()
+        self.ax.clear() # Clear previous plot
         self.ax.plot(self.times, self.trace_selected, label='Original Trace', color='blue')
         if hasattr(self, 'fit_y'):
             self.ax.plot(self.x_data, self.fit_y, label='Fitted Curve', color='red', linestyle='--')
         self.canvas.draw()
     
     def fit_preview_trace(self):
+        """
+        Fit the currently selected trace and display the results.
+        """
+        
         import time
         start_time = time.perf_counter()
         # Get the model expression and parameter values
@@ -2501,8 +2516,8 @@ class TracesFitter:
         for param, value in self.fit_params.items():
             result_text += f"{param} = {value:.6g}\n"
         result_text += f"\nFit time for preview trace: {elapsed:.3f} seconds\n"
+                
         # Estimate total time for all traces if possible
-        
         num_traces = self.data.trace_reference.shape[2]
         total_estimate = elapsed * num_traces
         result_text += f"Estimated time for all traces: {total_estimate:.1f} seconds ({total_estimate/60:.1f} min)\n"
@@ -2512,6 +2527,10 @@ class TracesFitter:
         self.fit_results_text.config(state=tk.DISABLED)
 
     def fit_all_traces(self):
+        """
+        Fit the model to all traces and store the results.
+        """
+        
         self.fit_preview_trace()  # Fit the currently selected trace first to validate the model
 
         fit_results = np.array([])
