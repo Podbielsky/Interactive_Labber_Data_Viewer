@@ -1,0 +1,18 @@
+# Trace Fitting User Guide 
+
+This is a user guide for the option `Tools > Fit Traces` in the Array and Line Plotter. 
+This tool enables the user to fit a mathematical expression to all traces in a hdf5 file and get a map of fit parameters. 
+
+1. Open your file as usual with `Plotting > Plot Map with Trace Data`. 
+2. Select `Tools > Fit Traces`.
+3. A window with a preview trace should now open. You can select a different preview trace using the spinboxes for the X- and Y-Index. These are the same indices that are shown in the map plot. 
+4. You can use the Model Expression text box to enter a mathematical expression that should be fit to the traces. 
+- This expression may contain:
+    - Basic Mathematical operators in python notation e.g.: "+", "-", "*", "/", "**" 
+    - numpy functions e.g.: "np.exp(x)", "a*np.sin(b*x)"
+    - Gaussians (G$Index$(x)) and Lambertians (L$Index$(x)) e.g.: "L1(x)", "G3(x)" 
+5. Set start parameters for all parameters that are used in your expression
+6. Optional: Press `Fit Preview` to fit the expression to the displayed preview trace 
+7. Optional: Adjust the maximum number of function evaluations (maxfev) for the fit. This can help get a better result at the cost of runtime. 
+8. Press `Run on all Traces` to fit the expression to all traces in the selected file. 
+9. Go back to the map and select one of the parameters as the input channel for the map. 
