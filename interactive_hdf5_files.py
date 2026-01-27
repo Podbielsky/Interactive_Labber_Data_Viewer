@@ -26,11 +26,14 @@ def data_menu_bar(root, hdf5data):
     file.add_command(label='Create a HDF5 File from Numpy Files', command=lambda : create_hdf5_files_from_npy(root))
     file.add_command(label='Remove Selected Datasets', command=lambda: remove_selected_options_window(root, hdf5data)) #Hannah Vogel: to select datasets to be removed
     file.add_separator()
+    file.add_command(label='Add Traces from HDF5 File', command=lambda: add_traces_window(hdf5data)) # Nico Reinders: to add traces to current file from another HDF5 file
+    file.add_command(label='Generate Traces from Dataset', command=lambda: transform_traces_window(hdf5data)) # Nico Reinders: create a file with a 'Traces' group that is compatible with the interactive data viewer 
+    
     data = tk.Menu(menubar, tearoff=0)
     menubar.add_cascade(label='Data', menu=data)
     data.add_command(label='Save Data as Numpy Array', command=lambda: create_data_array(hdf5data))
     data.add_command(label='Save Traces as Numpy Arrays', command=lambda: create_trace_array(hdf5data))
-    data.add_command(label='Add traces from HDF5 File', command=lambda: add_traces_window(hdf5data)) # Nico Reinders: to add traces to current file from another HDF5 file
+    
     
     data.add_command(label='Calculate Histograms', command=lambda: create_hist_data(hdf5data))
     
@@ -65,7 +68,277 @@ def get_unique_filename(filepath):
     return new_filepath
 
 
+def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
+    """
+    Added by Nico Reinders
+    Reshapes the selected dataset to be compatible with the requirements of the data viewer "Plot Map with Trace Data"
+    by moving the specified dimension to the first position and reshaping it.
+    
+    """
+    if type(selected_dataset) is not np.ndarray:
+        selected_dataset = np.array(selected_dataset[:])
+        
+    if len(np.shape(selected_dataset)) == 2:
+        selected_dataset = np.array([selected_dataset])
+        dimension_index += 1
+    
+    if selected_axis_dataset is None: #if no dataset is selected for the x-axis, use default values
+        t0, dt = 0, 1
+        print("No axis dataset selected, using default t0=0 and dt=1.")
+    else:
+        # materialize to a NumPy array (works for h5py.Dataset and ndarrays)
+        if type(selected_axis_dataset) is not np.ndarray:
+            arr = np.asarray(selected_axis_dataset[()]) if hasattr(selected_axis_dataset, "__getitem__") else np.asarray(selected_axis_dataset)
+        arr = np.ravel(arr)  # flatten
 
+        if arr.ndim == 1 and arr.size >= 2: # Check if the axis dataset is 1D and has at least 2 elements
+            t0 = arr[0]
+            diffs = np.diff(arr)
+            dt = np.min(np.abs(diffs))
+        else: # if the axis dataset has unusable shape, use default values
+            t0, dt = 0, 1
+            print("Warning: Selected axis dataset is not 1D or too short, using default t0=0 and dt=1.")
+
+    
+    shape_original = selected_dataset.shape
+    print(f"Original Shape of spectra: {shape_original}") 
+    
+    # Keep a copy of the original spectra for mean calculation
+    spectra_original = selected_dataset.copy()
+
+    selected_dataset = np.moveaxis(selected_dataset, dimension_index, 0)  # Move the selected axis to the first position
+    selected_dataset = np.reshape(selected_dataset, (selected_dataset.shape[0], 1, -1)) # Reshape to required shape
+    shape = selected_dataset.shape
+    print(f"Shape of spectra: {shape}") 
+        
+    # Validate shape_original dimensions
+    if len(shape_original) < 2:
+        raise ValueError("The selected dataset must have at least two dimensions.")
+
+    # Adjust data_data shape to account for dimension_index
+    reduced_shape = list(shape_original)
+    reduced_shape.pop(dimension_index)  # Remove the selected dimension
+
+    data_data = np.zeros((reduced_shape[0], 3, reduced_shape[1]))
+
+    # Assign values to data_data with explicit broadcasting
+    data_data[:, 0, :] = np.broadcast_to(np.arange(reduced_shape[0])[:, None], (reduced_shape[0], reduced_shape[1]))
+    data_data[:, 1, :] = np.broadcast_to(np.arange(reduced_shape[1])[None, :], (reduced_shape[0], reduced_shape[1]))
+    data_data[:, 2, :] = np.mean(spectra_original, axis=dimension_index).reshape(reduced_shape)  # Reshape mean result to match reduced dimensions
+
+    print(f"Shape of data_data: {data_data.shape}")
+
+    output_path = filedialog.asksaveasfilename(defaultextension=".hdf5", filetypes=[("HDF5 files", "*.hdf5")], title="Save HDF5 file as...")
+
+    if output_path:
+        print("Saving traces file to:", output_path)
+    else:
+        print("User cancelled")
+
+    # Save the reshaped data and traces in the output file
+    with h5py.File(output_path, 'w') as out_file:
+        traces_grp = out_file.create_group('Traces', track_order=True)
+        traces_grp.create_dataset('Data', data=selected_dataset)
+        traces_grp.create_dataset('Data_N', data=[shape[0]])
+        traces_grp.create_dataset('Alazar Slytherin - Ch1 - Data_t0dt', data=[[t0, dt]])
+
+        data_grp = out_file.create_group('Data')
+        data_grp.attrs['Step dimensions'] = [reduced_shape[0], reduced_shape[1]]
+        data_grp.attrs['Step index'] = [0, 1]
+        data_grp.create_dataset('Data', data=data_data)
+        data_grp.create_dataset('Channel names', data=[(b'Axis 1', b''), (b'Axis 2', b''), (b'Channel 1', b'')])
+        out_file.create_dataset('Log list', data=[(b'Channel 1', b'')])
+
+        out_file.close()
+    
+    
+def transform_traces_window(hdf5Data):
+    '''
+    Added by Nico Reinders
+    Opens a window to select a dataset to reshape into traces.
+    '''
+    
+    pth = filedialog.askopenfilename(filetypes=[("HDF5 files", "*.hdf5"), ("Numpy files", "*.npy")])
+    if not pth:
+        print("No file selected. Operation cancelled.")
+        return
+    root, ext = os.path.splitext(pth)
+    if ext == '.hdf5':
+        print('hdf5')
+        reshape_hdf5Data = HDF5Data(wdir=pth)
+        reshape_hdf5Data.set_path(pth, 'r')
+        # Open file and keep it open for the window lifetime
+        reshape_hdf5Data.file = h5py.File(pth, 'r')
+    elif ext == '.npy':
+        print('npy') 
+        arr = np.load(pth, allow_pickle=True)
+        print("Select axis numpy file for traces if needed.")
+        axis_path = filedialog.askopenfilename(filetypes=[("Numpy files", "*.npy")])
+        if not axis_path:
+            axis_arr = None
+        else: 
+            axis_arr = np.load(axis_path, allow_pickle=True)
+    else:
+        messagebox.showerror("Invalid File", "Please select a valid HDF5 or Numpy (.npy) file.")
+        return
+    
+    def check_axis_reshape_requirements(selected_item):
+        # Check if the selected item is a valid dataset as x-axis for traces
+        if not isinstance(selected_item, h5py.Dataset):
+            # print("Selected item is not a dataset.")
+            return False        
+        elif len(selected_item.shape) != 1:
+            # print("Selected dataset does not have 1 dimension.")
+            return False
+        elif selected_item.shape[0] < 2:
+            # print("Selected dataset is too short, must have at least 2 elements.")
+            return False
+        else: 
+            return True
+    
+    def check_dataset_reshape_requirements(selected_item):
+        # Check if the selected item is a valid dataset for reshaping to traces
+        if selected_item is None:
+            print("No item selected.")
+            return False
+        elif not isinstance(selected_item, h5py.Dataset):
+            print("Selected item is not a dataset.")
+            return False        
+        elif len(selected_item.shape) not in (2, 3):
+            print("Selected dataset does not have 2 or 3 dimensions.")
+            return False
+        else: 
+            return True
+
+
+    def on_var_change(*args): 
+        # Update the labels and dimension index based on the selected datasets
+        selected_dataset = dataset_map[dataset_selection.get()] if dataset_selection.get() in dataset_map else None
+        selected_axis_dataset = axis_map[axis_selection.get()] if axis_selection.get() in axis_map else None
+        dataset_label_text.set(f"{selected_dataset if selected_dataset is not None else ''}")
+        axis_label_text.set(f"{selected_axis_dataset if selected_axis_dataset is not None else ''}")
+        
+        if selected_axis_dataset is not None and np.array(selected_axis_dataset[:]).ndim == 1:
+            dim = np.shape(selected_dataset).index(len(selected_axis_dataset))
+        else:
+            dim = 0
+        dimension_index.set(dim)
+
+    
+            
+    transform_options = tk.Toplevel()
+
+    def on_close_transform_options():
+        try:
+            if reshape_hdf5Data.file:
+                reshape_hdf5Data.file.close()
+        except Exception:
+            pass
+        transform_options.destroy()
+  
+    
+    transform_options.protocol("WM_DELETE_WINDOW", on_close_transform_options)
+
+    
+    # Frame for dataset labels
+    label_frame = tk.Frame(transform_options)
+    label_frame.pack(anchor='w', pady=5, padx=5, fill='x')
+
+    # Store the valid datasets and axis datasets in dictionaries
+    if ext == '.hdf5':
+        dataset_map = {}
+        axis_map = {}
+        file = reshape_hdf5Data.file
+        def visitor(name, obj):
+            if isinstance(obj, h5py.Dataset) and check_dataset_reshape_requirements(obj):
+                dataset_map[name] = obj  # name is the full HDF5 path
+        file.visititems(visitor)
+
+        def visitor_axis(name, obj):
+            if isinstance(obj, h5py.Dataset) and check_axis_reshape_requirements(obj):
+                axis_map[name] = obj  # name is the full HDF5 path
+        file.visititems(visitor_axis)
+        
+        axis_map['None'] = None  # Add a 'None' option for no axis dataset
+
+        datasets_names = list(dataset_map.keys())
+        axis_names = list(axis_map.keys())
+
+        dataset_selection = tk.StringVar(value=datasets_names[0] if datasets_names else "")  # default selection
+        database_combo = ttk.Combobox(label_frame, textvariable=dataset_selection, values=datasets_names, state="readonly")
+        
+
+        axis_selection = tk.StringVar(value=axis_names[0] if axis_names else "")  # default selection
+        axis_combo = ttk.Combobox(label_frame, textvariable=axis_selection, values=axis_names, state="readonly")
+        
+        dataset_selection.trace_add("write", on_var_change)
+        axis_selection.trace_add("write", on_var_change)
+
+        
+        dataset_label_text = tk.StringVar(value=f"{dataset_map[dataset_selection.get()] if dataset_selection.get() in dataset_map else ''}")
+        axis_label_text = tk.StringVar(value=f"{axis_map[axis_selection.get()] if axis_selection.get() in axis_map else ''}")
+
+        database_combo.grid(row=0, column=1, padx=10, pady=10, sticky='w')
+        axis_combo.grid(row=1, column=1, padx=10, pady=10, sticky='w')
+        
+        tk.Label(label_frame, textvariable=dataset_label_text).grid(row=0, column=2, padx=10, pady=5, sticky='w')    
+        tk.Label(label_frame, textvariable=axis_label_text).grid(row=1, column=2, padx=10, pady=5, sticky='w')    
+        
+        tk.Label(label_frame, text="Selected Dataset:").grid(row=0, column=0, padx=10, pady=5, sticky='e')
+        tk.Label(label_frame, text="Selected Axis Dataset:").grid(row=1, column=0, padx=10, pady=5, sticky='e')
+    else:
+        tk.Label(label_frame, text=f"Numpy file shape: {arr.shape}").pack(anchor='w')
+    # Frame for spinbox + label
+    spin_frame = tk.Frame(transform_options)
+    
+    spin_frame.pack(anchor='w', pady=5, padx=5, fill='x')
+
+    tk.Label(spin_frame, text="Index of dimension in selected dataset to be used as x axis:").pack(side='left', padx=(0, 5))
+
+    def validate_int(new_value):
+        # validate the spinbox input
+        if new_value == "":  # allow empty (so user can type)
+            return True
+        try:
+            value = int(new_value)
+        except ValueError:
+            return False
+        return 0 <= value <= 2
+    
+    vcmd = (transform_options.register(validate_int), '%P')  # %P is the new value of the spinbox    
+        
+    dimension_index = tk.IntVar(value=0)  # Default to 0
+    
+    # add a spinbox to select the dimension that will be used as trace length
+    tk.Spinbox(spin_frame, from_=0, to=2, increment=1, width=5, textvariable=dimension_index,validate="key", validatecommand=vcmd).pack(side='left')
+
+    if ext == '.hdf5':
+        on_var_change()  # Initial call to set labels
+
+    # Buttons frame
+    button_frame = tk.Frame(transform_options)
+    button_frame.pack(pady=10)
+
+    if ext == '.hdf5':
+        confirm_button = tk.Button(
+            button_frame,
+            text="Confirm Reshape",
+            command=lambda: (apply_reshape(dataset_map[dataset_selection.get()], axis_map[axis_selection.get()], int(dimension_index.get())), transform_options.destroy())
+        )
+    else:
+        confirm_button = tk.Button(
+            button_frame,
+            text="Confirm Reshape",
+            command=lambda: (apply_reshape(arr, axis_arr, int(dimension_index.get())), transform_options.destroy())
+        )
+    confirm_button.pack(side='left', padx=5)
+
+    cancel_button = tk.Button(button_frame, text="Cancel", command=transform_options.destroy)
+    cancel_button.pack(side='left', padx=5)
+    
+    
+    
+    
 def add_traces_window(hdf5Data):
     """
     Added by Nico Reinders
@@ -131,20 +404,36 @@ def add_traces_window(hdf5Data):
                     group.create_dataset(trace_name, data=trace[()])
             hdf5Data.set_data()
         elif isinstance(h5obj, h5py.Dataset):
+            import time
             trace_name = values_above[-1]
             with h5py.File(hdf5Data.readpath, 'r+') as dest_file:
-                # Create or get the destination group (with track_order=True)
+                t0 = time.time()
+                recreate_group = False
+                # Always use absolute group path, never nest
                 if dest_group in dest_file:
+                    old_group = dest_file[dest_group]
+                    # Only recreate if track_order is not already True
+                    track_order = getattr(old_group, 'track_order', None)
+                    if not track_order:
+                        recreate_group = True
+                if recreate_group:
+                    print(f"Recreating group '{dest_group}' with track_order=True to avoid nesting.")
+                    new_group = dest_file.create_group('dest_group_tmp', track_order=True)
+                    dest_file.copy(old_group, new_group)
+                    del dest_file[old_group.name]
+                    dest_file.move('dest_group_tmp', dest_group)
+                    group = dest_file[dest_group]  # Always re-fetch from root
+                elif dest_group in dest_file:
                     group = dest_file[dest_group]
                 else:
                     group = dest_file.create_group(dest_group, track_order=True)
-                
-                # If dataset already exists, delete it
+                t1 = time.time()
+                # Save the dataset directly in the destination group, not as a subgroup
                 if trace_name in group:
                     del group[trace_name]
-                
-                # Copy dataset directly
                 group.create_dataset(trace_name, data=h5obj[()])
+                t2 = time.time()
+                print(f"Dataset copy timings: group_prep={t1-t0:.3f}s, create={t2-t1:.3f}s, total={t2-t0:.3f}s")
             hdf5Data.set_data()
         else:
             print("Invalid Selection", "Selected item is neither a group nor a dataset.")

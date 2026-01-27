@@ -428,9 +428,16 @@ class HDF5Data:
             print(f"Error creating traces as array: {e}")
 
     def set_traces_dt(self):
+        trace_keys = list(self.file['Traces'].keys())
+        
         if self.file is None:
             self.set_data()
-        self.traces_dt = self.file['Traces']['Alazar Slytherin - Ch1 - Data_t0dt'][0][1]
+        
+        if 'Alazar Slytherin - Ch1 - Data_t0dt' in self.file['Traces']: # changed by Nico Reinders
+
+            self.traces_dt = self.file['Traces']['Alazar Slytherin - Ch1 - Data_t0dt'][0][1]
+        else: 
+            self.traces_dt = self.file[f'Traces/{trace_keys[0]}'][0][1]
 
     def save_traces_in_wdir(self):
         if not self.saved_traces:
