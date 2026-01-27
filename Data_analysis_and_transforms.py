@@ -643,6 +643,16 @@ def double_gaussian(x, a1, mu1, sigma1, a2, mu2, sigma2, c):
     '''
     return gaussian(x, a1, mu1, sigma1) + gaussian(x, a2, mu2, sigma2) + c
 
+def lorentzian(x, a, x0, gamma, c):
+    '''
+    :param x: 1d array for x-values
+    :param a: amplitude
+    :param x0: center position
+    :param gamma: half-width at half-maximum (HWHM)
+    :param c: constant offset
+    :return: lorentzian peak function a * (gamma / ((x - x0)**2 + gamma**2)) + c
+    '''
+    return a * (gamma / ((x - x0)**2 + gamma**2)) + c
 
 def snr_calculation(param):
     '''

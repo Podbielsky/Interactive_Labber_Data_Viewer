@@ -425,10 +425,10 @@ class HDF5Data:
                 # Append data to the corresponding lists
                 if name in log_list_names:
                     name_data.append(name)
-                    measurement_data.append(target_array)
+                    measurement_data.append(processed_array)
                 else:
                     name_axis.append(name)
-                    measurement_axis.append(target_array)
+                    measurement_axis.append(processed_array)
 
             # Set the class attributes
             self.measure_data = measurement_data

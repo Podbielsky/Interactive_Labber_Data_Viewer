@@ -20,9 +20,10 @@ from scipy import constants as co
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, two_d_ifft_on_data, evaluate_poly_background_2d,
                                           correct_median_diff, correct_mean_of_lines, gradient_5p_stencil,
                                           subtract_trace_average, cut_data_range, extract_linecut,
-                                          skewed_gaussian_func_shape, beta_func_shape, trace_wise_min_max_scaling)
+                                          skewed_gaussian_func_shape, beta_func_shape, trace_wise_min_max_scaling, lorentzian, gaussian)
 from gamma_map import (get_t_rates, get_fourier, fft_correction_select, fft_correction_apply, get_cuts)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap
+from scipy import optimize
 neon_cmap = make_neon_cyclic_colormap()
 bi_map = make_bi_colormap() # take out
 plt.register_cmap(name='BiMap', cmap=bi_map)
@@ -226,6 +227,7 @@ class InteractiveArrayPlotter:
         self.tool_menu.add_command(label="Draw Lines", command=self.open_draw_lines_window)
         if self.contains_traces:
             self.tool_menu.add_command(label="Correct Trace Fourier spectrum", command=self.open_fft_trace_correction_window)
+            self.tool_menu.add_command(label="Fit Traces", command=self.fit_traces)
         self.menubar.add_cascade(label="Tools", menu=self.tool_menu)
         self.tool_menu.add_command(label="2-D FFT Filter", command=self.open_2d_fft_filter)
         
@@ -388,7 +390,14 @@ class InteractiveArrayPlotter:
             try:
                 self.sliced_data = ((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
                     0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
+            except ValueError:
+                if hasattr(self.traces_fitter, 'fit_results_dict') and self.data_combobox.get() in self.traces_fitter.fit_results_dict:
+                    print(self.traces_fitter.fit_results_dict.keys())
+                    self.sliced_data = (self.traces_fitter.fit_results_dict[self.data_combobox.get()]).reshape(np.flip(self.data.measure_dim))
+                    print('Using fit results for plotting.')
+
             except IndexError:
+                
                 if not self.loaded:
                     print('fetching data...')
                     self.data.set_traces()
@@ -410,6 +419,7 @@ class InteractiveArrayPlotter:
                     self.sliced_data = self.gamma_up
                 elif self.data_combobox.get() == "Tunneling rates out":
                     self.sliced_data = self.gamma_down
+                
 
             self.ax.clear()
             self.xlim = (np.min(self.X), np.max(self.X))
@@ -990,6 +1000,30 @@ class InteractiveArrayPlotter:
         submit_button.pack(side=tk.BOTTOM)
         self.data_axis_transform_naming_frame.pack(side=tk.LEFT)
         self.data_axis_transform_scaling_frame.pack(side=tk.RIGHT)
+
+
+    def make_params_viewable(self):
+        self.traces_fitter.fit_all_traces()
+        self.fit_results_dict = self.traces_fitter.fit_results_dict
+        # Update the global data_combobox with parameter names from fit_results_dict
+        current_values = list(self.data_combobox['values'])
+        for param in self.fit_results_dict.keys():
+            if param not in current_values:
+                current_values.append(param)
+        self.data_combobox['values'] = current_values
+    
+    def fit_traces(self):
+
+        self.traces_fitter = TracesFitter(self.data, self.root)
+        self.traces_fitter.create_widgets()
+        run_btn = ttk.Button(self.traces_fitter.model_frame, text="Run on all Traces", command=self.make_params_viewable)
+        run_btn.grid(row=3, column=1, columnspan=2, pady=5, padx=5)
+        self.traces_fitter.update_plot()
+
+
+       
+        
+    
 
     def open_fft_trace_correction_window(self):
         #### Created by Nico Reinders ####
@@ -2054,7 +2088,7 @@ class InteractiveArrayPlotter:
 
 class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
     def __init__(self, root, hdf5data):
-
+        
         self.trace_x_index = 0
         self.trace_y_index = 0
 
@@ -2195,6 +2229,339 @@ class InteractiveTimeTraceMapPlotter(InteractiveArrayPlotter):
 
         super().__init__(root, hdf5data)
 
+
+import re
+class TracesFitter:
+    """
+    A GUI application for fitting peak functions/distributions to 1D traces 
+    """
+
+    def __init__(self, data, master=None):
+        
+        # Initialize trace indices
+        self.trace_index_x = 0
+        self.trace_index_y = 0
+        
+        # Set up the main window
+        if master is None:
+            self.root = tk.Tk()
+            self.root.title("Traces Fitter")
+            self.root.geometry("800x600")
+        else:
+            self.root = tk.Toplevel(master)
+            self.root.title("Traces Fitter")
+            # self.root.geometry("800x600")
+        
+        
+        self.data = data
+        
+        # Define available models
+        self.models = {
+            'G': [gaussian, ('x', 'a', 'mu', 'sigma')],
+            'L': [lorentzian, ('x', 'a', 'x0', 'gamma', 'c')]
+        }
+        
+        self.fitted_params = [] # Store fitted parameters
+        self.fit_results = [] # Store fit results
+        
+        # Create matplotlib figure and axis
+        self.fig = plt.Figure(figsize=(6, 5), dpi=100)
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_xlabel('x')
+        self.ax.set_ylabel('y')
+
+        
+    def create_widgets(self):
+        """Create all GUI widgets for the fitter interface."""
+        # Create main frame for layout
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Create frame for plot
+        plot_frame = ttk.Frame(main_frame)
+        plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Create canvas for matplotlib figure
+        self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
+        self.canvas_widget = self.canvas.get_tk_widget()
+        self.canvas_widget.pack(fill=tk.BOTH, expand=True)
+
+        # Add toolbar
+        toolbar_frame = ttk.Frame(plot_frame)
+        toolbar_frame.pack(fill=tk.X, expand=True)
+        toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
+        toolbar.update()
+
+        # Create model definition frame
+        self.model_frame = ttk.Frame(main_frame, width=200)
+        self.model_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5, expand=True)
+
+        # Add fit results text box
+        self.fit_results_text = tk.Text(self.model_frame, height=10, width=30, wrap=tk.WORD)
+        self.fit_results_text.grid(row=7, column=0, columnspan=2, sticky=tk.NSEW, padx=5, pady=5)
+        self.fit_results_text.config(state=tk.DISABLED)
+
+        # Model expression input
+        ttk.Label(self.model_frame, text="Model Expression:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        self.model_expr_var = tk.StringVar(value="a*x + b + G1(x)")  # Default is a linear model
+        model_expr_entry = ttk.Entry(self.model_frame, textvariable=self.model_expr_var, width=30)
+        model_expr_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        # Example label
+        ttk.Label(self.model_frame, text="Example: a*np.exp(-x/b) + c + L1(x)").grid(row=1, column=0, columnspan=2, sticky=tk.W,
+                                                                        padx=5)
+
+        # Parameter frame
+        param_frame = ttk.LabelFrame(self.model_frame, text="Initial Parameters")
+        param_frame.grid(row=2, column=0, columnspan=2, sticky=tk.NSEW, padx=5, pady=10)
+        
+        # Default parameters (a and b for linear model)
+        self.param_vars = {}
+        param_entries = {}
+
+        self.dist_vars = {}
+        dist_entries = {}
+
+        # Initial parameters for default linear model
+        self.param_vars['a'] = tk.DoubleVar(value=1.0)
+        self.param_vars['b'] = tk.DoubleVar(value=0.0)
+
+        # Add entries for default parameters
+        ttk.Label(param_frame, text="a:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        param_entries['a'] = ttk.Entry(param_frame, textvariable=self.param_vars['a'], width=10)
+        param_entries['a'].grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(param_frame, text="b:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        param_entries['b'] = ttk.Entry(param_frame, textvariable=self.param_vars['b'], width=10)
+        param_entries['b'].grid(row=1, column=1, padx=5, pady=5)
+
+        # Add maxfev entry
+        self.maxfev_var = tk.IntVar(value=2200)
+        ttk.Label(self.model_frame, text="Max Function Evaluations (maxfev):").grid(row=6, column=0, sticky=tk.W, padx=5, pady=5)
+        maxfev_entry = ttk.Entry(self.model_frame, textvariable=self.maxfev_var, width=10)
+        maxfev_entry.grid(row=6, column=1, padx=5, pady=5)
+    
+        
+        # Add spinboxes for selecting trace indices
+        ttk.Label(self.model_frame, text="Trace X Index:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=5)
+        self.trace_x_index_var = tk.IntVar(value=0) 
+        trace_x_spinbox = ttk.Spinbox(self.model_frame, from_=0, to=self.data.measure_dim[0]-1, textvariable=self.trace_x_index_var, width=10)
+        trace_x_spinbox.grid(row=4, column=1, padx=5, pady=5)
+        trace_x_spinbox.bind("<FocusOut>", lambda e: self.update_plot())
+        trace_x_spinbox.bind("<Return>", lambda e: self.update_plot())
+        
+        ttk.Label(self.model_frame, text="Trace Y Index:").grid(row=5, column=0, sticky=tk.W, padx=5, pady=5)
+        self.trace_y_index_var = tk.IntVar(value=0)
+        trace_y_spinbox = ttk.Spinbox(self.model_frame, from_=0, to=self.data.measure_dim[1]-1, textvariable=self.trace_y_index_var, width=10)
+        trace_y_spinbox.grid(row=5, column=1, padx=5, pady=5)
+        trace_y_spinbox.bind("<FocusOut>", lambda e: self.update_plot())
+        trace_y_spinbox.bind("<Return>", lambda e: self.update_plot())
+        
+        # Ensure the window is sized correctly before adding dynamic content
+        self.root.update()  
+        self.root.minsize(self.root.winfo_width(), self.root.winfo_height())
+
+        # Function to update parameters when the model expression changes
+        def update_params(*args):
+            # Clear existing parameter entries
+            for widget in param_frame.winfo_children():
+                widget.destroy()
+
+            # Extract parameter names from the expression
+            expr = self.model_expr_var.get()
+            params = set()
+            dists = set()
+            
+            
+            for match in re.finditer(r'\b([a-zA-Z](?!\w*\())\b', expr): # Match standalone variable names not followed by '('
+                param = match.group(1)
+                if param not in {'x', 'np', 'co', 'sp', 'L', 'G'}:  # Skip x variable, numpy, and L/G
+                    params.add(param)
+            for match in re.finditer(r"([LG]\d+)", expr):
+                dist = match.group(1)
+                dists.add(dist)
+
+            # Create entries for each parameter
+            self.param_vars.clear()
+            param_entries.clear()
+            self.dist_vars.clear()
+            dist_entries.clear()
+            
+            # Create separate frames for parameters and distributions
+            param_subframe = ttk.Frame(param_frame)
+            param_subframe.grid(row=0, column=0, columnspan=2, sticky=tk.NSEW)
+
+            dist_subframe = ttk.Frame(param_frame)
+            dist_subframe.grid(row=1, column=0, columnspan=2, sticky=tk.NSEW)
+
+            # Clear and populate parameter entries
+            for widget in param_subframe.winfo_children():
+                widget.destroy()
+            for i, param in enumerate(sorted(params)):
+                self.param_vars[param] = tk.DoubleVar(value=1.0)
+                ttk.Label(param_subframe, text=f"{param}:").grid(row=i, column=0, sticky=tk.W, padx=5, pady=5)
+                param_entries[param] = ttk.Entry(param_subframe, textvariable=self.param_vars[param], width=10)
+                param_entries[param].grid(row=i, column=1, padx=5, pady=5)
+
+            # Clear and populate distribution entries
+            for widget in dist_subframe.winfo_children():
+                widget.destroy()
+            for i, dist in enumerate(sorted(dists)):
+                dist_params = self.models[dist[0]][1]
+                self.dist_vars[dist] = [tk.DoubleVar(value=1.0) for _ in dist_params[1:]]  # Skip 'x' variable
+                
+                ttk.Label(dist_subframe, text=f"{dist}: ").grid(row=i, column=0, sticky=tk.W, padx=5, pady=5)
+                for j, param in enumerate(dist_params[1:]):
+                    ttk.Label(dist_subframe, text=f"{param}:").grid(row=i, column=2*j+1, sticky=tk.W, padx=5, pady=5)
+                
+                dist_entries[param] = [ttk.Entry(dist_subframe, textvariable=self.dist_vars[dist][j], width=10).grid(row=i, column=2*j+2, padx=5, pady=5) for j, param in enumerate(dist_params[1:])]
+            
+
+        # Bind the model expression entry to update parameters
+        self.model_expr_var.trace_add("write", update_params)
+        
+
+        # Add fit buttons
+        preview_btn = ttk.Button(self.model_frame, text="Fit Preview", command=self.fit_preview_trace)
+        preview_btn.grid(row=3, column=0, columnspan=2, pady=5, padx=5)
+    
+    def get_one_index(self, trace_index_x, trace_index_y): # Convert 2D indices to 1D index
+        return self.data.measure_dim[1] * trace_index_x + trace_index_y
+            
+    def update_plot(self):
+        """
+        Update the plot with the selected trace and fitted curve if available.
+        """
+        # Get the selected trace
+        self.trace_index = self.get_one_index(self.trace_x_index_var.get(), self.trace_y_index_var.get())
+        self.trace_selected = self.data.trace_reference[::, 0, self.trace_index]
+        self.times = self.data.traces_dt * np.arange(0, len(self.trace_selected))
+        
+        self.ax.clear() # Clear previous plot
+        self.ax.plot(self.times, self.trace_selected, label='Original Trace', color='blue')
+        if hasattr(self, 'fit_y'):
+            self.ax.plot(self.x_data, self.fit_y, label='Fitted Curve', color='red', linestyle='--')
+        self.canvas.draw()
+    
+    def fit_preview_trace(self):
+        """
+        Fit the currently selected trace and display the results.
+        """
+        
+        import time
+        start_time = time.perf_counter()
+        # Get the model expression and parameter values
+        expr = self.model_expr_var.get()
+        params = {param: var.get() for param, var in self.param_vars.items()}
+        dist_params = {dist: [var.get() for var in vars_list] for dist, vars_list in self.dist_vars.items()}
+
+        # Create the model function
+        # Order of arguments: x, params, [G1a, G1mu, G1sigma], [L1a, L1x0, L1gamma, L1c], ...
+        def model_func(x, *args):
+            # Map args to parameter names in the order used for curve_fit
+            param_names = list(params.keys())
+            dist_param_names = []
+            for dist in sorted(dist_params.keys()):
+                dist_param_names.extend([f"{dist}_{param}" for param in self.models[dist[0]][1][1:]])
+            all_param_names = param_names + dist_param_names
+
+            # Build param_dict from args
+            param_dict = {name: value for name, value in zip(all_param_names, args)}
+            param_dict['x'] = x
+            param_dict['np'] = np
+            param_dict['co'] = co
+
+            # Add distribution functions (L1, G1, etc.) as callables to param_dict, using fit parameters
+            for dist in sorted(dist_params.keys()):
+                dist_func = self.models[dist[0]][0]
+                dist_param_names_local = self.models[dist[0]][1][1:]  # skip 'x'
+                dist_values = [param_dict[f"{dist}_{param}"] for param in dist_param_names_local]
+                param_dict[dist] = (lambda dist_func=dist_func, dist_values=dist_values: lambda x: dist_func(x, *dist_values))()
+
+            return eval(expr, {"__builtins__": {}}, param_dict)
+
+        self.model_func = model_func  # Store the model function for later use
+
+        # Build parameter name list in the exact order used for curve_fit
+        param_names = list(params.keys())
+        dist_param_names = []
+        for dist in sorted(dist_params.keys()):
+            dist_param_names.extend([f"{dist}_{param}" for param in self.models[dist[0]][1][1:]])
+        self.all_param_names = param_names + dist_param_names
+
+        # Initial parameter values
+        p0 = [params[param] for param in param_names]
+        for dist in sorted(dist_params.keys()):
+            p0.extend(dist_params[dist])
+
+        # Fit the model
+        self.x_data, self.y_data = self.times, self.trace_selected
+        self.maxfev = self.maxfev_var.get()
+        popt, pcov = optimize.curve_fit(model_func, self.x_data, self.y_data, p0=p0, maxfev=self.maxfev)
+        end_time = time.perf_counter()
+        elapsed = end_time - start_time
+
+        # Fit results
+        self.fit_params = {param: val for param, val in zip(self.all_param_names, popt)}
+
+        # Generate fitted curve
+        self.fit_y = model_func(self.x_data, *popt)
+
+        # Add the fitted curve 
+        self.update_plot()
+        self.canvas.draw()
+
+        # Show the fitted parameters in the persistent text box
+        result_text = "Fitted parameters:\n"
+        for param, value in self.fit_params.items():
+            result_text += f"{param} = {value:.6g}\n"
+        result_text += f"\nFit time for preview trace: {elapsed:.3f} seconds\n"
+                
+        # Estimate total time for all traces if possible
+        num_traces = self.data.trace_reference.shape[2]
+        total_estimate = elapsed * num_traces
+        result_text += f"Estimated time for all traces: {total_estimate:.1f} seconds ({total_estimate/60:.1f} min)\n"
+        self.fit_results_text.config(state=tk.NORMAL)
+        self.fit_results_text.delete(1.0, tk.END)
+        self.fit_results_text.insert(tk.END, result_text)
+        self.fit_results_text.config(state=tk.DISABLED)
+
+    def fit_all_traces(self):
+        """
+        Fit the model to all traces and store the results.
+        """
+        
+        self.fit_preview_trace()  # Fit the currently selected trace first to validate the model
+
+        fit_results = np.array([])
+        num_traces = self.data.trace_reference.shape[2]
+
+        # Create progress bar window
+        progress_win = tk.Toplevel(self.root)
+        progress_win.title("Fitting Progress")
+        progress_win.geometry("400x100")
+        progress_label = tk.Label(progress_win, text="Fitting traces...")
+        progress_label.pack(padx=20, pady=10)
+        progress_var = tk.DoubleVar()
+        progress_bar = ttk.Progressbar(progress_win, variable=progress_var, maximum=num_traces, length=350)
+        progress_bar.pack(padx=20, pady=20, fill=tk.X)
+
+        progress_win.update()  # Force window to appear before starting loop
+        for i in range(num_traces):
+            x_data, y_data = self.times, self.trace_selected
+            p0 = [self.fit_params[param] for param in self.all_param_names]
+            popt, pcov = optimize.curve_fit(self.model_func, x_data, y_data, p0=p0, maxfev=self.maxfev)
+            fit_results = np.append(fit_results, popt)
+            # Update progress bar
+            progress_var.set(i + 1)
+            progress_win.update()  # Update window and progress bar
+
+        progress_win.destroy()
+        self.fit_results = fit_results.reshape(-1, len(self.all_param_names))
+        self.fit_results_dict = {param: self.fit_results[:, idx] for idx, param in enumerate(self.all_param_names)}
+        return self.fit_results_dict
+        
+        
 
 class UtilityLinePlotter:
     def __init__(self, master=None):
@@ -2559,105 +2926,5 @@ class UtilityLinePlotter:
             except Exception as e:
                 messagebox.showerror("Fit Error", f"Error fitting model: {str(e)}")
 
-        ttk.Button(button_frame, text="Fit", command=fit_model).pack(side=tk.LEFT, padx=10)
-        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT, padx=10)
-
-    def open_export_window(self):
-        """Open a dialog to export the selected line trace as text or numpy file."""
-        if self.selected_line_idx is None or self.selected_line_idx >= len(self.data):
-            messagebox.showinfo("No Selection", "Please select a line trace to export.")
-            return
-
-        # Get the selected data
-        x_data, y_data, label = self.data[self.selected_line_idx]
-
-        # Create a new dialog window
-        export_dialog = tk.Toplevel(self.root)
-        export_dialog.title("Export Line Trace")
-        export_dialog.geometry("300x150")
-        export_dialog.transient(self.root)
-        export_dialog.grab_set()
-
-        # Add info label
-        info_label = ttk.Label(export_dialog, text=f"Export data for: {label}")
-        info_label.pack(pady=(10, 20))
-
-        # Button frame
-        button_frame = ttk.Frame(export_dialog)
-        button_frame.pack(fill=tk.X, pady=10)
-
-        def export_as_text():
-            file_path = filedialog.asksaveasfilename(
-                defaultextension=".txt",
-                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
-                initialfile=f"{label.replace(' ', '_')}.txt"
-            )
-            if file_path:
-                try:
-                    with open(file_path, 'w') as f:
-                        f.write("# X\tY\n")
-                        for x, y in zip(x_data, y_data):
-                            f.write(f"{x}\t{y}\n")
-                    messagebox.showinfo("Export Successful", f"Data exported to {file_path}")
-                    export_dialog.destroy()
-                except Exception as e:
-                    messagebox.showerror("Export Error", f"Error exporting data: {str(e)}")
-
-        def export_as_numpy():
-            file_path = filedialog.asksaveasfilename(
-                defaultextension=".npy",
-                filetypes=[("NumPy files", "*.npy"), ("All files", "*.*")],
-                initialfile=f"{label.replace(' ', '_')}.npy"
-            )
-            if file_path:
-                try:
-                    data_array = np.column_stack((x_data, y_data))
-                    np.save(file_path, data_array)
-                    messagebox.showinfo("Export Successful", f"Data exported to {file_path}")
-                    export_dialog.destroy()
-                except Exception as e:
-                    messagebox.showerror("Export Error", f"Error exporting data: {str(e)}")
-
-        # Export buttons
-        txt_button = ttk.Button(button_frame, text="Export as Text", command=export_as_text)
-        txt_button.pack(side=tk.LEFT, expand=True, padx=10)
-
-        numpy_button = ttk.Button(button_frame, text="Export as NumPy", command=export_as_numpy)
-        numpy_button.pack(side=tk.RIGHT, expand=True, padx=10)
-
-        # Cancel button
-        cancel_button = ttk.Button(export_dialog, text="Cancel", command=export_dialog.destroy)
-        cancel_button.pack(pady=10)
-
-    def is_alive(self):
-        """Check if the toplevel window still exists and is not destroyed."""
-        try:
-            return self.toplevel.winfo_exists()
-        except:
-            return False
-
-    def update_plot(self):
-        """Update the plot with current data and settings."""
-        self.ax.clear()
-
-        colors = plt.cm.tab10.colors
-
-        for i, (x, y, label) in enumerate(self.data):
-            color = colors[i % len(colors)]
-            if i == self.selected_line_idx:
-                # Highlight selected line
-                self.ax.plot(x, y, label=label, color=color, linewidth=2.5)
-            else:
-                self.ax.plot(x, y, label=label, color=color, linewidth=1.5)
-
-        # Add labels and legend if there is data
-        if self.data:
-            self.ax.set_xlabel('Distance')
-            self.ax.set_ylabel('Value')
-            if self.show_legend_var.get():
-                self.ax.legend()
-
-        # Draw the canvas
-        self.canvas.draw()
-
-
+        
+        
