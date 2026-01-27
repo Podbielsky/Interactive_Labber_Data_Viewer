@@ -172,6 +172,7 @@ class HDF5Data:
         self.name_axis = name_axis
         self.name_data = name_data
         self.measure_data = measure_data
+        self.channels = None
         self.measure_dim = measure_dim
         self.completed_measurement = True
         self.current_h5dir = current_h5dir
@@ -360,6 +361,15 @@ class HDF5Data:
                 self.set_array_tags()
             if self.measure_dim is None:
                 self.set_measure_dim()
+
+            # Check if 'Channels' exists in the file before accessing it
+            if self.channels is None:
+                if 'Channels' in self.file:
+                    self.channels = self.file['Channels']
+                else:
+                    # Initialize as empty if 'Channels' doesn't exist
+                    self.channels = []
+
             self.complete_status()
             # Calculate the expected shape of the arrays
             should_array_shape = (int(self.measure_dim[0]), int(np.prod(np.array(self.measure_dim)[1:])))
@@ -371,6 +381,18 @@ class HDF5Data:
             name_data = []
             measurement_axis = []
             name_axis = []
+
+            # Create a dictionary to store channel parameters for all channels
+            channel_params = {}
+            # Only process channels if they exist
+            if len(self.channels) > 0:
+                for channel in self.channels:
+                    channel_name = channel['name']
+                    channel_params[channel_name] = {
+                        'gain': channel['gain'],
+                        'offset': channel['offset'],
+                        'amp': channel['amp']
+                    }
 
             for name in array_tags_names:
                 index = array_tags_names.index(name)
@@ -384,6 +406,21 @@ class HDF5Data:
                     slices = tuple(slice(0, min(dim, size)) for size, dim in zip(is_shape, should_array_shape))
                     padded_array[slices] = target_array
                     target_array = padded_array
+
+                # Process the array with the formula if channel parameters exist
+                processed_array = target_array
+                if name in channel_params:
+                    params = channel_params[name]
+                    gain = params['gain']
+                    offset = params['offset']
+                    amp = params['amp']
+
+                    # Avoid division by zero
+                    if amp != 0 and gain != 0:
+                        processed_array = (target_array / amp - offset) / gain
+                    else:
+                        # If gain or amp is zero, just use the original array
+                        print(f"Warning: gain or amp is zero for channel {name}. Using original data.")
 
                 # Append data to the corresponding lists
                 if name in log_list_names:
@@ -429,14 +466,14 @@ class HDF5Data:
 
     def set_traces_dt(self):
         trace_keys = list(self.file['Traces'].keys())
-        
+
         if self.file is None:
             self.set_data()
-        
+
         if 'Alazar Slytherin - Ch1 - Data_t0dt' in self.file['Traces']: # changed by Nico Reinders
 
             self.traces_dt = self.file['Traces']['Alazar Slytherin - Ch1 - Data_t0dt'][0][1]
-        else: 
+        else:
             self.traces_dt = self.file[f'Traces/{trace_keys[0]}'][0][1]
 
     def save_traces_in_wdir(self):

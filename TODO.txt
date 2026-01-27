@@ -22,3 +22,6 @@ TODO list for next versions:
 
 - BUG Installation does not work on certain Windows desktops (no clue why, probably to not activating the venv and
  using the default system PATH)
+
+
+- BUG When exporting data to numpy arrays, the order is dependent how the data is recorded but not on how it is displayed
