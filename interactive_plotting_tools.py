@@ -175,6 +175,7 @@ class InteractiveArrayPlotter:
         self.name_data_y_axis = ''
         self.name_data_x_axis = ''
         self.num_dimensions = len(self.data.measure_dim) - 2
+        print(self.num_dimensions)
         self.name_data = [str(label) for label in self.data.name_data]
         self.name_data = [label.encode('utf-8').decode('utf-8') for label in self.name_data]
         if self.contains_traces:
@@ -375,51 +376,31 @@ class InteractiveArrayPlotter:
         selected_display_values = [combobox.get() for combobox in self.parameter_comboboxes]
         selected_colormap = self.colormap_combobox.get()
         selected_indices = []
+
         for i, display_value in enumerate(selected_display_values):
             # Convert the display value back to an index
             index = self.display_values_list[i].index(float(display_value))
             selected_indices.append(index)
 
-        # Use selected values to slice and plot data
-        if not self.invert_enabled:
-            self.X = (np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])
-            self.nan_mask = ~np.isnan(self.X).any(axis=1)
-            self.X = self.X[self.nan_mask]
-            self.Y = (np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(
-                0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
-            try:
-                self.sliced_data = ((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
-                    0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
-            except ValueError:
-                if hasattr(self.traces_fitter, 'fit_results_dict') and self.data_combobox.get() in self.traces_fitter.fit_results_dict:
-                    print(self.traces_fitter.fit_results_dict.keys())
-                    self.sliced_data = (self.traces_fitter.fit_results_dict[self.data_combobox.get()]).reshape(np.flip(self.data.measure_dim))
-                    print('Using fit results for plotting.')
+        if self.num_dimensions == -1:
+            x_values = self.data.measure_axis[-1].flatten()
+            self.nan_mask = ~np.isnan(x_values)
+            x_values = x_values[self.nan_mask]
 
-            except IndexError:
-                
-                if not self.loaded:
-                    print('fetching data...')
-                    self.data.set_traces()
-                    self.data.set_traces_dt()
-                    self.traces = self.data.traces
-                    self.times = self.data.traces_dt * np.arange(0, len(self.traces[0][0]))
-                    self.loaded = True
-                else:
-                    pass
+            # Create X as a 2D array with each x-value repeated twice
+            # Each row will have identical x-values: [[x1, x1], [x2, x2], ...]
+            self.X = np.swapaxes(np.repeat(x_values[:, np.newaxis], 3, axis=1), 0, 1)
 
-                if not self.calculated:
-                    print('calculating tunneling rates...')
-                    _, self.gamma_up, self.gamma_down = get_t_rates(self.traces, self.times)
-                    self.calculated = True
-                else:
-                    pass
+            # Create Y with two different values for each X position
+            # This creates two rows in the 2D plot
+            y_values = np.array([0, 1, 3])  # Two arbitrary Y values
+            self.Y = np.swapaxes(np.tile(y_values, (len(x_values), 1)), 0, 1)
 
-                if self.data_combobox.get() == "Tunneling rates in":
-                    self.sliced_data = self.gamma_up
-                elif self.data_combobox.get() == "Tunneling rates out":
-                    self.sliced_data = self.gamma_down
-                
+            # Handle sliced_data: Repeat each value twice to match X and Y dimensions
+            original_data = self.data.measure_data[self.name_data.index(self.data_combobox.get())].flatten()
+            filtered_data = original_data[self.nan_mask]
+            # Repeat each value to create a 2D array with identical values in each row
+            self.sliced_data = np.swapaxes(np.repeat(filtered_data[:, np.newaxis], 3, axis=1), 0, 1)
 
             self.ax.clear()
             self.xlim = (np.min(self.X), np.max(self.X))
@@ -427,51 +408,103 @@ class InteractiveArrayPlotter:
 
             self.name_data_z = self.data_combobox.get()
             self.name_data_x_axis = str(np.flip(self.data.name_axis)[-1])
-            self.name_data_y_axis = str(np.flip(self.data.name_axis)[-2])
-        #### Modified by Nico Reinders ####
-        if self.invert_enabled:
-            self.X = ((np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(0, 1).reshape(
-                np.flip(self.data.measure_dim))[tuple(selected_indices)]))
-            self.nan_mask = ~np.isnan(self.X).any(axis=1)
-            self.X = (self.X[self.nan_mask]).T
+            self.name_data_y_axis = 'y-dummy'
 
-            self.Y = ((np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(
-                np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]).T
-            try:
-                self.sliced_data = (((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
-                    0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]).T
-            except IndexError:
-                if not self.loaded:
-                    print('fetching data...')
-                    self.data.set_traces()
-                    self.data.set_traces_dt()
-                    self.traces = self.data.traces
-                    self.times = self.data.traces_dt * np.arange(0, len(self.traces[0][0]))
-                    self.loaded = True
-                else:
-                    pass
 
-                if not self.calculated:
-                    print('calculating tunneling rates...')
-                    _, self.gamma_up, self.gamma_down = get_t_rates(self.traces, self.times)
-                    self.gamma_up.T
-                    self.gamma_down.T
-                    self.calculated = True
-                else:
-                    pass
 
-                if self.data_combobox.get() == "Tunneling rates in":
-                    self.sliced_data = self.gamma_up.transpose()
-                elif self.data_combobox.get() == "Tunneling rates out":
-                    self.sliced_data = self.gamma_down.transpose()
-            #### end of Modification by Nico Reinders ####
-            self.ax.clear()
-            self.xlim = (np.min(self.X), np.max(self.X))
-            self.ylim = (np.min(self.Y), np.max(self.Y))
+        else:
+            # Use selected values to slice and plot data
+            if not self.invert_enabled:
+                self.X = (np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])
+                self.nan_mask = ~np.isnan(self.X).any(axis=1)
+                self.X = self.X[self.nan_mask]
+                self.Y = (np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(
+                    0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
+                try:
+                    self.sliced_data = ((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
+                        0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
+                except ValueError:
+                    if hasattr(self.traces_fitter, 'fit_results_dict') and self.data_combobox.get() in self.traces_fitter.fit_results_dict:
+                        print(self.traces_fitter.fit_results_dict.keys())
+                        self.sliced_data = (self.traces_fitter.fit_results_dict[self.data_combobox.get()]).reshape(np.flip(self.data.measure_dim))
+                        print('Using fit results for plotting.')
 
-            self.name_data_z = self.data_combobox.get()
-            self.name_data_y_axis = str(np.flip(self.data.name_axis)[-1])
-            self.name_data_x_axis = str(np.flip(self.data.name_axis)[-2])
+                except IndexError:
+
+                    if not self.loaded:
+                        print('fetching data...')
+                        self.data.set_traces()
+                        self.data.set_traces_dt()
+                        self.traces = self.data.traces
+                        self.times = self.data.traces_dt * np.arange(0, len(self.traces[0][0]))
+                        self.loaded = True
+                    else:
+                        pass
+
+                    if not self.calculated:
+                        print('calculating tunneling rates...')
+                        _, self.gamma_up, self.gamma_down = get_t_rates(self.traces, self.times)
+                        self.calculated = True
+                    else:
+                        pass
+
+                    if self.data_combobox.get() == "Tunneling rates in":
+                        self.sliced_data = self.gamma_up
+                    elif self.data_combobox.get() == "Tunneling rates out":
+                        self.sliced_data = self.gamma_down
+
+
+                self.ax.clear()
+                self.xlim = (np.min(self.X), np.max(self.X))
+                self.ylim = (np.min(self.Y), np.max(self.Y))
+
+                self.name_data_z = self.data_combobox.get()
+                self.name_data_x_axis = str(np.flip(self.data.name_axis)[-1])
+                self.name_data_y_axis = str(np.flip(self.data.name_axis)[-2])
+            #### Modified by Nico Reinders ####
+            if self.invert_enabled:
+                self.X = ((np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(0, 1).reshape(
+                    np.flip(self.data.measure_dim))[tuple(selected_indices)]))
+                self.nan_mask = ~np.isnan(self.X).any(axis=1)
+                self.X = (self.X[self.nan_mask]).T
+
+                self.Y = ((np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(
+                    np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]).T
+                try:
+                    self.sliced_data = (((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
+                        0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]).T
+                except IndexError:
+                    if not self.loaded:
+                        print('fetching data...')
+                        self.data.set_traces()
+                        self.data.set_traces_dt()
+                        self.traces = self.data.traces
+                        self.times = self.data.traces_dt * np.arange(0, len(self.traces[0][0]))
+                        self.loaded = True
+                    else:
+                        pass
+
+                    if not self.calculated:
+                        print('calculating tunneling rates...')
+                        _, self.gamma_up, self.gamma_down = get_t_rates(self.traces, self.times)
+                        self.gamma_up.T
+                        self.gamma_down.T
+                        self.calculated = True
+                    else:
+                        pass
+
+                    if self.data_combobox.get() == "Tunneling rates in":
+                        self.sliced_data = self.gamma_up.transpose()
+                    elif self.data_combobox.get() == "Tunneling rates out":
+                        self.sliced_data = self.gamma_down.transpose()
+                #### end of Modification by Nico Reinders ####
+                self.ax.clear()
+                self.xlim = (np.min(self.X), np.max(self.X))
+                self.ylim = (np.min(self.Y), np.max(self.Y))
+
+                self.name_data_z = self.data_combobox.get()
+                self.name_data_y_axis = str(np.flip(self.data.name_axis)[-1])
+                self.name_data_x_axis = str(np.flip(self.data.name_axis)[-2])
 
         if hasattr(self, 'cbar'):
             self.cbar.remove()
@@ -677,7 +710,6 @@ class InteractiveArrayPlotter:
 
             self.x_index = np.argmin(np.abs(self.X[0] - event.xdata))
             self.y_index = np.argmin(np.abs(self.Y[:, 0] - event.ydata))
-
             # Update the vertical line plot
             self.ax_vline.clear()
             self.ax_vline.plot(self.sliced_data[:, self.x_index], self.Y[:, 0])
@@ -1022,8 +1054,8 @@ class InteractiveArrayPlotter:
 
 
        
-        
-    
+
+
 
     def open_fft_trace_correction_window(self):
         #### Created by Nico Reinders ####
@@ -2926,5 +2958,4 @@ class UtilityLinePlotter:
             except Exception as e:
                 messagebox.showerror("Fit Error", f"Error fitting model: {str(e)}")
 
-        
-        
+
