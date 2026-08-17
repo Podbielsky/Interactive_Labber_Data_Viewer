@@ -338,7 +338,6 @@ def evaluate_poly_background_2d(x, y, z, order_x, order_y,
 
     return background
 
-
 def correct_median_diff(imag):
 
     '''

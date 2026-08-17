@@ -1,4 +1,7 @@
-from matplotlib.colors import LinearSegmentedColormap
+from dask.array.core import retrieve_from_ooc
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap, ListedColormap
+import numpy as np
 
 def make_neon_cyclic_colormap():
     # Define colors
@@ -28,3 +31,17 @@ def make_bi_colormap():
     # Define colors
     bi_pride = LinearSegmentedColormap.from_list("", ["#D60270", "#9B4F96", "#0038A8"])
     return bi_pride
+
+
+def make_half_red_map():
+    cmap1 = plt.cm.twilight
+    one_sided_cmap_r = cmap1(np.linspace(0.65, 1.0, cmap1.N))[::-1]
+    # Adjust 0.5 to get the desired range
+    one_sided_cmap_r = ListedColormap(one_sided_cmap_r)
+    return one_sided_cmap_r
+
+def make_half_blue_map():
+    cmap1 = plt.cm.twilight
+    one_sided_cmap_b = cmap1(np.linspace(0.1, 0.5, cmap1.N))  # Adjust 0.5 to get the desired range
+    one_sided_cmap_b = ListedColormap(one_sided_cmap_b)
+    return one_sided_cmap_b

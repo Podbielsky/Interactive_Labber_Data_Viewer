@@ -1,5 +1,8 @@
 TODO list for next versions:
-
+- Add line cut  comparison in the overview
+- Add copy paster for arb. linecuts
+- Fix ROI selection for the trace fitting
+- Make ROI selection more flexibel
 - add snr calc for multi parameter maps based on bimodal gaussian distribution
     - should be easier than the point before, but you have to think about how the data structure is handled
 
@@ -11,8 +14,6 @@ TODO list for next versions:
 - implement external traces
 
 - rescaling of line-plots in the line-cut section should be improved to get better visibility
-
-- implement fourier filter
 
 -maybe add functionality to plot single traces and perform fits on them, should be done after .npy read-in works.
  Should include mulit column read in for hdf5 data and multi-trace selection.

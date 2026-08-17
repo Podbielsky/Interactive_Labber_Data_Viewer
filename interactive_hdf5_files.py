@@ -81,35 +81,37 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
     if len(np.shape(selected_dataset)) == 2:
         selected_dataset = np.array([selected_dataset])
         dimension_index += 1
-    
-    if selected_axis_dataset is None: #if no dataset is selected for the x-axis, use default values
+
+    if selected_axis_dataset is None:  # if no dataset is selected for the x-axis, use default values
         t0, dt = 0, 1
         print("No axis dataset selected, using default t0=0 and dt=1.")
     else:
-        # materialize to a NumPy array (works for h5py.Dataset and ndarrays)
-        if type(selected_axis_dataset) is not np.ndarray:
-            arr = np.asarray(selected_axis_dataset[()]) if hasattr(selected_axis_dataset, "__getitem__") else np.asarray(selected_axis_dataset)
+        # Always materialize axis data into a NumPy array first
+        if isinstance(selected_axis_dataset, h5py.Dataset):
+            arr = np.asarray(selected_axis_dataset[()])
+        else:
+            arr = np.asarray(selected_axis_dataset)
+
         arr = np.ravel(arr)  # flatten
 
-        if arr.ndim == 1 and arr.size >= 2: # Check if the axis dataset is 1D and has at least 2 elements
+        if arr.ndim == 1 and arr.size >= 2:  # Check if the axis dataset is 1D and has at least 2 elements
             t0 = arr[0]
             diffs = np.diff(arr)
             dt = np.min(np.abs(diffs))
-        else: # if the axis dataset has unusable shape, use default values
+        else:  # if the axis dataset has unusable shape, use default values
             t0, dt = 0, 1
             print("Warning: Selected axis dataset is not 1D or too short, using default t0=0 and dt=1.")
 
-    
     shape_original = selected_dataset.shape
-    print(f"Original Shape of spectra: {shape_original}") 
-    
+    print(f"Original Shape of spectra: {shape_original}")
+
     # Keep a copy of the original spectra for mean calculation
     spectra_original = selected_dataset.copy()
 
     selected_dataset = np.moveaxis(selected_dataset, dimension_index, 0)  # Move the selected axis to the first position
-    selected_dataset = np.reshape(selected_dataset, (selected_dataset.shape[0], 1, -1)) # Reshape to required shape
+    selected_dataset = np.reshape(selected_dataset, (selected_dataset.shape[0], 1, -1))  # Reshape to required shape
     shape = selected_dataset.shape
-    print(f"Shape of spectra: {shape}") 
+    print(f"Shape of spectra: {shape}")
         
     # Validate shape_original dimensions
     if len(shape_original) < 2:

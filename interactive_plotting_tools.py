@@ -1,5 +1,7 @@
 import time
 import os
+import threading
+import queue
 import tkinter as tk
 from tkinter import ttk, messagebox
 from tkinter import filedialog
@@ -16,17 +18,22 @@ import matplotlib.colors as colors
 from matplotlib.path import Path
 from matplotlib.transforms import TransformedPath
 from scipy.ndimage import gaussian_filter
+from scipy.signal import savgol_filter
 from scipy import constants as co
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, two_d_ifft_on_data, evaluate_poly_background_2d,
                                           correct_median_diff, correct_mean_of_lines, gradient_5p_stencil,
                                           subtract_trace_average, cut_data_range, extract_linecut,
                                           skewed_gaussian_func_shape, beta_func_shape, trace_wise_min_max_scaling, lorentzian, gaussian)
 from gamma_map import (get_t_rates, get_fourier, fft_correction_select, fft_correction_apply, get_cuts)
-from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap
+from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap, make_half_red_map, make_half_blue_map
 from scipy import optimize
 neon_cmap = make_neon_cyclic_colormap()
 bi_map = make_bi_colormap() # take out
+half_red_map = make_half_red_map()
+half_blue_map = make_half_blue_map()
 plt.register_cmap(name='BiMap', cmap=bi_map)
+plt.register_cmap(name='RedMap', cmap=half_red_map)
+plt.register_cmap(name='BlueMap', cmap=half_blue_map)
 plt.register_cmap(name='NeonPiCy', cmap=neon_cmap)
 rc('pdf', fonttype=42)
 
@@ -186,6 +193,7 @@ class InteractiveArrayPlotter:
         self.nan_mask = np.array([])
         self.loaded = False # rename to be more discriptiv
         self.calculated = False
+        self.auto_scale_factor = 2.5
 
         #ROI attributes
         self.roi_mode = False
@@ -223,6 +231,7 @@ class InteractiveArrayPlotter:
         # Create Tool Menu
         self.tool_menu = tk.Menu(self.menubar, tearoff=0)
         self.tool_menu.add_command(label="Derivative along Axis", command=self.open_derivative_window)
+        self.tool_menu.add_command(label="Savitzky-Golay Filter", command=self.open_savitzky_golay_filter_window)
         self.tool_menu.add_command(label="Norm of Gradient", command=self.apply_sum_of_gradient)
         self.tool_menu.add_command(label="2-D FFT on Data", command=self.apply_2d_fft)
         self.tool_menu.add_command(label="Draw Lines", command=self.open_draw_lines_window)
@@ -231,7 +240,7 @@ class InteractiveArrayPlotter:
             self.tool_menu.add_command(label="Fit Traces", command=self.fit_traces)
         self.menubar.add_cascade(label="Tools", menu=self.tool_menu)
         self.tool_menu.add_command(label="2-D FFT Filter", command=self.open_2d_fft_filter)
-        
+
         # Create Help Menu
         self.help_menu = tk.Menu(self.menubar, tearoff=0)
         self.help_menu.add_command(label="About", command=self.show_about)
@@ -257,7 +266,7 @@ class InteractiveArrayPlotter:
         self.picked_line = None
 
         # Define interactive button options
-        self.colormaps = ['viridis', 'plasma', 'inferno', 'magma', 'cividis', 'twilight', 'coolwarm', 'Spectral',
+        self.colormaps = ['viridis', 'plasma', 'inferno', 'magma', 'cividis', 'twilight', 'BlueMap', 'RedMap' ,'coolwarm', 'Spectral',
                           'gnuplot', 'NeonPiCy', 'BiMap']
         self.bg_methods = ['Polynomial', 'Median Difference', 'Mean of Lines', 'Relation Parameters',
                            'Subtract Trace Average']
@@ -367,7 +376,7 @@ class InteractiveArrayPlotter:
         self.histogram_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True, anchor=tk.N)
         self.plot_data()
         self.canvas.mpl_connect('key_press_event', self.on_key_press)
-        
+
 
     def plot_data(self):
         tick = time.perf_counter()
@@ -653,8 +662,9 @@ class InteractiveArrayPlotter:
     def init_movable_lines(self):
         # Initial positions for vmin and vmax lines
         if self.auto_scale_var.get() or self.vmin is None or self.vmax is None:
-            vmin_initial = np.nanmin(self.sliced_data)
-            vmax_initial = np.nanmax(self.sliced_data)
+            self.apply_auto_scaling()
+            vmin_initial = self.vmin
+            vmax_initial = self.vmax
         else:
             vmin_initial = self.vmin
             vmax_initial = self.vmax
@@ -988,11 +998,87 @@ class InteractiveArrayPlotter:
         submit_button = tk.Button(self.derivative_window, text="Apply", command=self.apply_derivative)
         submit_button.pack()
 
+    def open_savitzky_golay_filter_window(self):
+        self.savitzky_golay_filter_window = tk.Toplevel(self.root)
+        self.savitzky_golay_filter_window.title("Savitzky-Golay Filter")
+        self.savitzky_golay_filter_window.geometry("400x220")
+
+        self.savgol_axis_selection = ['y', 'x']
+
+        tk.Label(self.savitzky_golay_filter_window, text="Axis:").pack()
+        self.savgol_axis_combobox = ttk.Combobox(
+            self.savitzky_golay_filter_window,
+            values=self.savgol_axis_selection,
+            state='readonly',
+            width=10
+        )
+        self.savgol_axis_combobox.pack()
+        self.savgol_axis_combobox.set('x')
+
+        tk.Label(self.savitzky_golay_filter_window, text="Window length:").pack()
+        self.savgol_window_entry = tk.Entry(self.savitzky_golay_filter_window)
+        self.savgol_window_entry.pack()
+        self.savgol_window_entry.insert(0, "7")
+
+        tk.Label(self.savitzky_golay_filter_window, text="Polynomial order:").pack()
+        self.savgol_poly_entry = tk.Entry(self.savitzky_golay_filter_window)
+        self.savgol_poly_entry.pack()
+        self.savgol_poly_entry.insert(0, "2")
+
+        tk.Label(self.savitzky_golay_filter_window, text="Derivative order:").pack()
+        self.savgol_deriv_entry = tk.Entry(self.savitzky_golay_filter_window)
+        self.savgol_deriv_entry.pack()
+        self.savgol_deriv_entry.insert(0, "0")
+
+        submit_button = tk.Button(
+            self.savitzky_golay_filter_window,
+            text="Apply",
+            command=self.apply_savitzky_golay_filter
+        )
+        submit_button.pack(pady=10)
+
+    def apply_savitzky_golay_filter(self):
+        axis_name = self.savgol_axis_combobox.get()
+        axis = self.savgol_axis_selection.index(axis_name)
+
+        window_length = int(self.savgol_window_entry.get())
+        polyorder = int(self.savgol_poly_entry.get())
+        deriv = int(self.savgol_deriv_entry.get())
+
+        if window_length % 2 == 0:
+            window_length += 1
+
+        max_window = self.sliced_data.shape[axis]
+        if window_length > max_window:
+            window_length = max_window if max_window % 2 == 1 else max_window - 1
+
+        if window_length <= polyorder:
+            messagebox.showerror(
+                "Invalid Savitzky-Golay settings",
+                "Window length must be larger than polynomial order."
+            )
+            return
+
+        self.sliced_data = savgol_filter(
+            self.sliced_data,
+            window_length=window_length,
+            polyorder=polyorder,
+            axis=axis,
+            deriv=deriv,
+            mode='interp'
+        )
+
+        if self.auto_scale_var.get():
+            self.apply_auto_scaling()
+
+        self.update_histogramm()
+        self.update_pcolormesh(self.vmin, self.vmax)
+
     def open_data_axis_transform(self):
         self.data_axis_transform_window = tk.Toplevel(self.root)
         self.use_trace_wise_min_max_scaling_var = tk.BooleanVar(value=False)
         self.data_axis_transform_window.title("Axis Scaling and Renaming")
-        self.data_axis_transform_window.geometry("400x200")
+        self.data_axis_transform_window.geometry("400x240")
 
         self.data_axis_transform_naming_frame = ttk.Frame(self.data_axis_transform_window)
         self.data_axis_transform_scaling_frame = ttk.Frame(self.data_axis_transform_window)
@@ -1021,6 +1107,11 @@ class InteractiveArrayPlotter:
         self.z_axis_scale_input.pack()
         self.z_axis_scale_input.insert(0, '1.0')
 
+        tk.Label(self.data_axis_transform_scaling_frame, text="Auto Scale Factor:").pack()
+        self.auto_scale_factor_input = tk.Entry(self.data_axis_transform_scaling_frame)
+        self.auto_scale_factor_input.pack()
+        self.auto_scale_factor_input.insert(0, str(self.auto_scale_factor))
+
         self.use_trace_wise_min_max_scaling_check = tk.Checkbutton(
             self.data_axis_transform_window,
             text="Trace Wise min-max scaling",
@@ -1033,7 +1124,6 @@ class InteractiveArrayPlotter:
         self.data_axis_transform_naming_frame.pack(side=tk.LEFT)
         self.data_axis_transform_scaling_frame.pack(side=tk.RIGHT)
 
-
     def make_params_viewable(self):
         self.traces_fitter.fit_all_traces()
         self.fit_results_dict = self.traces_fitter.fit_results_dict
@@ -1043,7 +1133,7 @@ class InteractiveArrayPlotter:
             if param not in current_values:
                 current_values.append(param)
         self.data_combobox['values'] = current_values
-    
+
     def fit_traces(self):
 
         self.traces_fitter = TracesFitter(self.data, self.root)
@@ -1051,11 +1141,6 @@ class InteractiveArrayPlotter:
         run_btn = ttk.Button(self.traces_fitter.model_frame, text="Run on all Traces", command=self.make_params_viewable)
         run_btn.grid(row=3, column=1, columnspan=2, pady=5, padx=5)
         self.traces_fitter.update_plot()
-
-
-       
-
-
 
     def open_fft_trace_correction_window(self):
         #### Created by Nico Reinders ####
@@ -1107,7 +1192,7 @@ class InteractiveArrayPlotter:
 
         # Create a Matplotlib figure and axis for the FFT filter
         self.fft_filter_fig, self.fft_filter_ax = plt.subplots(1, 1, figsize=(6, 6))
-        
+
         self.fft_filter_canvas = FigureCanvasTkAgg(self.fft_filter_fig, master=left_frame)
         self.fft_filter_canvas.draw_idle()
         self.fft_filter_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
@@ -1126,42 +1211,45 @@ class InteractiveArrayPlotter:
         tk.Radiobutton(radio_frame, text='Mask Editor', variable=self.fft_filter_mode, value='Mask Editor', command=self.update_fft_filter_plot).pack(anchor=tk.W)
         tk.Radiobutton(radio_frame, text='Filtered Data Preview', variable=self.fft_filter_mode, value='Filtered Data Preview', command=self.update_fft_filter_plot).pack(anchor=tk.W)
 
-        # Create selection shape buttons 
+        # Create selection shape buttons
         shape_frame = tk.Frame(right_frame)
         shape_frame.pack(side=tk.TOP, fill=tk.X, pady=25)
         self.selection_shape = tk.StringVar(value='Ellipse')
         self.ellipse_button = tk.Button(shape_frame, text='Ellipse', command=self.select_ellipse, relief='sunken', bg='#BBBBBB')
         self.ellipse_button.pack(side=tk.LEFT, padx=5)
         self.rectangle_button = tk.Button(shape_frame, text='Rectangle', command=self.select_rect, relief='raised')
-        self.rectangle_button.pack(side=tk.LEFT, padx=5) 
-        
+        self.rectangle_button.pack(side=tk.LEFT, padx=5)
+
         apply_frame = tk.Frame(right_frame)
         apply_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
-        tk.Button(apply_frame, text='Apply Filter', command=self.apply_fft_filter).pack(side=tk.LEFT, padx=5)   
-        
+        tk.Button(apply_frame, text='Apply Filter', command=self.apply_fft_filter).pack(side=tk.LEFT, padx=5)
+
         # Add option to toggle the mask outside (negative) checkbox
         mask_frame = tk.Frame(right_frame)
         mask_frame.pack(side=tk.TOP, fill=tk.X, pady=25)
         self.fft_mask_negative = tk.BooleanVar(value=False)
         self.fft_mask_checkbox = tk.Checkbutton(mask_frame, text="Mask Outside (Negative)", variable=self.fft_mask_negative, command=self.update_fft_filter_plot)
         self.fft_mask_checkbox.pack(anchor=tk.N)
-        
+
         self.shapes = np.array([]) # initialize shapes array to store drawn masks
-        
-        self.fft_filter_x, self.fft_filter_y, self.fft_filter_sliced_data = two_d_fft_on_data(self.sliced_data, self.X, self.Y, mode='Complex')	
-        self.vmin, self.vmax = np.absolute(self.fft_filter_sliced_data).min(), np.absolute(self.fft_filter_sliced_data).max()
-        
-        # Compute cell centers 
+
+        self.fft_filter_x, self.fft_filter_y, self.fft_filter_sliced_data = two_d_fft_on_data(self.sliced_data, self.X, self.Y, mode='Complex')
+        mean = np.mean(np.absolute(self.fft_filter_sliced_data))
+        std = np.std(np.absolute(self.fft_filter_sliced_data))
+        self.vmin = mean - self.auto_scale_factor * std
+        self.vmax = mean + self.auto_scale_factor * std
+
+        # Compute cell centers
         self.xc = (self.fft_filter_x[:-1, :-1] + self.fft_filter_x[1:, 1:]) / 2
         self.yc = (self.fft_filter_y[:-1, :-1] + self.fft_filter_y[1:, 1:]) / 2
         # Flatten for vectorized testing
         self.points = np.vstack((self.xc.ravel(), self.yc.ravel())).T
-        
+
         # Connect the event handlers
         self.fft_filter_fig.canvas.mpl_connect('button_press_event', self.fft_filter_on_press)
         self.fft_filter_fig.canvas.mpl_connect('button_release_event', self.fft_filter_on_release)
         self.fft_filter_fig.canvas.mpl_connect('motion_notify_event', self.fft_filter_on_motion)
-        
+
         self.update_fft_filter_plot()
 
     def apply_fft_mask(self, fft_filter_sliced_data_cut):
@@ -1175,7 +1263,7 @@ class InteractiveArrayPlotter:
             mask = mask.reshape(self.xc.shape)
             mask = 1-mask
             combined_mask = np.logical_and(combined_mask, mask)
-            
+
         if self.fft_mask_negative.get():
             combined_mask = 1 - combined_mask
         fft_filter_sliced_data_cut[:-1, :-1] *= combined_mask
@@ -1188,16 +1276,16 @@ class InteractiveArrayPlotter:
 
         _, _, self.fft_filter_sliced_data = two_d_fft_on_data(self.sliced_data, self.X, self.Y, mode='Complex')
         self.fft_filter_sliced_data_cut = self.apply_fft_mask(self.fft_filter_sliced_data)
-        
+
         self.fft_filter_sliced_data_preview = two_d_ifft_on_data(self.fft_filter_sliced_data_cut, self.fft_filter_x, self.fft_filter_y, mode='Complex')[2]
         self.sliced_data = np.abs(self.fft_filter_sliced_data_preview)
-        
+
         # remove all masks
         for i, shape in enumerate(self.shapes):
             shape.remove()
             self.shapes = np.delete(self.shapes, i)
-         
-            
+
+
     def select_ellipse(self):
         #### Created by Nico Reinders ####
         # Handles ellipse selection for FFT mask drawing.
@@ -1205,11 +1293,11 @@ class InteractiveArrayPlotter:
         if self.selection_shape.get() == 'Ellipse':
             self.selection_shape.set('Empty')
             self.ellipse_button.config(relief='raised', bg='SystemButtonFace')
-        else:    
+        else:
             self.selection_shape.set('Ellipse')
             self.ellipse_button.config(relief='sunken', bg='#BBBBBB')
             self.rectangle_button.config(relief='raised', bg='SystemButtonFace')
-    
+
     def select_rect(self):
         #### Created by Nico Reinders ####
         # Handles rectangle selection for FFT mask drawing.
@@ -1242,22 +1330,22 @@ class InteractiveArrayPlotter:
             event.ydata is None
         ):
             return  # Ignore the event if coordinates are not valid
-        
-        if event.button == 1 and self.start_point and self.fft_filter_mode.get() == 'Mask Editor':   
+
+        if event.button == 1 and self.start_point and self.fft_filter_mode.get() == 'Mask Editor':
             x0, y0 = self.start_point
             x1, y1 = event.xdata, event.ydata
             width =  x1 - x0
             height = y1 - y0
             center_x = (x0 + x1) / 2
             center_y = (y0 + y1) / 2
-            
+
             if hasattr(self, 'preview_ellipse'):
                 self.preview_ellipse.remove()
-            
+
             if hasattr(self, 'preview_rectangle'):
                 self.preview_rectangle.remove()
-                
-            if self.selection_shape.get() == 'Ellipse':    
+
+            if self.selection_shape.get() == 'Ellipse':
                 # Draw the new preview ellipse
                 self.preview_ellipse = matplotlib.patches.Ellipse((center_x, center_y), width, height, edgecolor='white', facecolor='none', linestyle='--')
                 self.fft_filter_ax.add_patch(self.preview_ellipse)
@@ -1282,7 +1370,7 @@ class InteractiveArrayPlotter:
             height = y1 - y0
             center_x = (x0 + x1) / 2
             center_y = (y0 + y1) / 2
-            
+
             if self.selection_shape.get() == 'Ellipse':
                 # Draw preview ellipse
                 ellipse = matplotlib.patches.Ellipse((center_x, center_y), width, height, color='red', fill=True, alpha=0.5)
@@ -1290,11 +1378,11 @@ class InteractiveArrayPlotter:
                 self.fft_filter_ax.add_patch(ellipse)
                 self.fft_filter_ax.add_patch(mirrored_ellipse)
                 self.shapes = np.append(self.shapes, ellipse)
-                self.shapes = np.append(self.shapes, mirrored_ellipse)           
+                self.shapes = np.append(self.shapes, mirrored_ellipse)
                 if hasattr(self, 'preview_ellipse'):
                     self.preview_ellipse.remove()
                     del self.preview_ellipse
-                
+
             elif self.selection_shape.get() == 'Rectangle':
                 # Draw preview rectangle
                 rectangle = matplotlib.patches.Rectangle((x0, y0), width, height, color='red', fill=True, alpha=0.5)
@@ -1302,17 +1390,17 @@ class InteractiveArrayPlotter:
                 self.fft_filter_ax.add_patch(rectangle)
                 self.fft_filter_ax.add_patch(mirrored_rectangle)
                 self.shapes = np.append(self.shapes, rectangle)
-                self.shapes = np.append(self.shapes, mirrored_rectangle)  
-                 
+                self.shapes = np.append(self.shapes, mirrored_rectangle)
+
                 if hasattr(self, 'preview_rectangle'):
                     self.preview_rectangle.remove()
                     del self.preview_rectangle
-                                
+
             plt.draw()
-            
+
         # Right mouse button to remove shapes
-        
-        elif event.button == 3 and self.fft_filter_mode.get() == 'Mask Editor':  
+
+        elif event.button == 3 and self.fft_filter_mode.get() == 'Mask Editor':
             x1, y1 = event.xdata, event.ydata
             x1, y1 = self.fft_filter_ax.transData.transform((x1, y1))
 
@@ -1330,14 +1418,14 @@ class InteractiveArrayPlotter:
         #### Created by Nico Reinders ####
         # Updates the FFT filter plot with current mask preview and corrected data preview.
 
-        if self.fft_filter_mode.get() == 'Mask Editor':    
+        if self.fft_filter_mode.get() == 'Mask Editor':
             # Mask Editor
-            
+
             # Show the mask editor control buttons that are hidden in the preview mode
             self.fft_mask_checkbox.pack()
             self.ellipse_button.pack(side=tk.LEFT, padx=5)
             self.rectangle_button.pack(side=tk.LEFT, padx=5)
-            
+
             # Clear the axes and plot the FFT data with the current masks
             self.fft_filter_ax.clear()
             vmin = np.min(np.abs(self.fft_filter_sliced_data))
@@ -1348,29 +1436,29 @@ class InteractiveArrayPlotter:
                 self.fft_filter_ax.add_patch(patch)
             self.fft_filter_ax.set_xlim(np.min(self.fft_filter_x), np.max(self.fft_filter_x))
             self.fft_filter_ax.set_ylim(np.min(self.fft_filter_y), np.max(self.fft_filter_y))
-            
+
             self.fft_filter_ax.set_xlabel('freq. of ' + self.name_data_x_axis)
             self.fft_filter_ax.set_ylabel('freq. of ' + self.name_data_y_axis)
             self.fft_filter_ax.set_title('FFT Amp of ' + self.name_data_z)
-             
-            
+
+
             plt.draw()
         else:
             # Filtered Data Preview
-            
+
             # Hide the mask editor control buttons
             self.fft_mask_checkbox.pack_forget()
             self.rectangle_button.pack_forget()
             self.ellipse_button.pack_forget()
-            
+
             self.fft_filter_sliced_data_cut = self.apply_fft_mask(self.fft_filter_sliced_data)
-            
-            # Show the preview of the filtered data            
+
+            # Show the preview of the filtered data
             self.fft_filter_x_preview, self.fft_filter_y_preview, self.fft_filter_sliced_data_preview = two_d_ifft_on_data(self.fft_filter_sliced_data_cut, self.fft_filter_x, self.fft_filter_y, mode='Complex')
-            self.fft_filter_ax.clear()            
+            self.fft_filter_ax.clear()
             vmin = np.min(self.fft_filter_sliced_data_preview)
             vmax = np.max(self.fft_filter_sliced_data_preview)
-            
+
             # Ensure the preview data is real-valued for plotting
             data_to_plot = self.fft_filter_sliced_data_preview
             if np.iscomplexobj(data_to_plot):
@@ -1391,18 +1479,19 @@ class InteractiveArrayPlotter:
                 else:
                     print(f"Plotting error: {e}")
                 raise
-            
+
             self.fft_filter_sliced_data = two_d_fft_on_data(self.sliced_data, self.X, self.Y, mode='Complex')[2]
             self.fft_filter_ax.set_xlabel(self.name_data_x_axis)
             self.fft_filter_ax.set_ylabel(self.name_data_y_axis)
             self.fft_filter_ax.set_title('Preview of FFT-filtered ' + self.name_data_z)
-        
+
         self.fft_filter_canvas.draw()
-        
+
     def apply_data_axis_transform(self):
         self.name_data_x_axis = str(self.x_axis_name_input.get())
         self.name_data_y_axis = str(self.y_axis_name_input.get())
         self.name_data_z = str(self.z_axis_name_input.get())
+        self.auto_scale_factor = np.float64(self.auto_scale_factor_input.get())
 
         self.X = self.X * np.float64(self.x_axis_scale_input.get())
         self.Y = self.Y * np.float64(self.y_axis_scale_input.get())
@@ -1415,8 +1504,7 @@ class InteractiveArrayPlotter:
             self.sliced_data = trace_wise_min_max_scaling(self.sliced_data)
 
         if self.auto_scale_var.get():
-            self.vmin = np.min(self.sliced_data)
-            self.vmax = np.max(self.sliced_data)
+            self.apply_auto_scaling()
 
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
@@ -1452,8 +1540,7 @@ class InteractiveArrayPlotter:
         self.sliced_data = self.sliced_data - bg
 
         if self.auto_scale_var.get():
-            self.vmin = np.min(self.sliced_data)
-            self.vmax = np.max(self.sliced_data)
+            self.apply_auto_scaling()
 
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
@@ -1461,16 +1548,14 @@ class InteractiveArrayPlotter:
     def apply_median_difference(self):
         self.sliced_data = correct_median_diff(self.sliced_data)
         if self.auto_scale_var.get():
-            self.vmin = np.min(self.sliced_data)
-            self.vmax = np.max(self.sliced_data)
+            self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
     def apply_mean_of_lines(self):
         self.sliced_data = correct_mean_of_lines(self.sliced_data)
         if self.auto_scale_var.get():
-            self.vmin = np.min(self.sliced_data)
-            self.vmax = np.max(self.sliced_data)
+            self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
@@ -1482,11 +1567,14 @@ class InteractiveArrayPlotter:
                             + np.float64(self.relation_parameter_entry_list[4].get()))
 
         if self.auto_scale_var.get():
-            self.vmin = np.min(self.sliced_data)
-            self.vmax = np.max(self.sliced_data)
+            self.apply_auto_scaling()
 
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
+
+    def apply_auto_scaling(self):
+        self.vmin = np.mean(self.sliced_data) - self.auto_scale_factor * np.std(self.sliced_data)
+        self.vmax = np.mean(self.sliced_data) + self.auto_scale_factor * np.std(self.sliced_data)
 
     def apply_subtract_trace_average(self):
         # Extract parameters from input fields
@@ -1510,8 +1598,7 @@ class InteractiveArrayPlotter:
             poly_fit_order=poly_fit_order
         )
         if self.auto_scale_var.get():
-            self.vmin = np.min(self.sliced_data)
-            self.vmax = np.max(self.sliced_data)
+            self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
@@ -1526,8 +1613,7 @@ class InteractiveArrayPlotter:
         # Calculate gradient
         self.sliced_data = np.gradient(self.sliced_data, dx, dy)[self.axis_selection.index(self.derivative_combobox.get())]
         if self.auto_scale_var.get():
-            self.vmin = np.min(self.sliced_data)
-            self.vmax = np.max(self.sliced_data)
+            self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
@@ -1539,8 +1625,7 @@ class InteractiveArrayPlotter:
         self.sliced_data = np.sqrt(np.gradient(self.sliced_data, dx, dy)[0] ** 2
                             + np.gradient(self.sliced_data, dx, dy)[1] ** 2)
         if self.auto_scale_var.get():
-            self.vmin = np.min(self.sliced_data)
-            self.vmax = np.max(self.sliced_data)
+            self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
@@ -1551,8 +1636,7 @@ class InteractiveArrayPlotter:
         self.name_data_y_axis = 'freq. of ' + self.name_data_y_axis
         self.xlim = [np.min(self.X), np.max(self.X)]
         self.ylim = [np.min(self.Y), np.max(self.Y)]
-        self.vmin = np.min(self.sliced_data)
-        self.vmax = np.max(self.sliced_data)
+        self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
@@ -1579,8 +1663,7 @@ class InteractiveArrayPlotter:
                 if len(self.sliced_data) > 0:
 
                     if self.auto_scale_var.get():
-                        self.vmin = np.min(self.sliced_data)
-                        self.vmax = np.max(self.sliced_data)
+                        self.apply_auto_scaling()
 
                     self.xlim = (np.min(self.X), np.max(self.X))
                     self.ylim = (np.min(self.Y), np.max(self.Y))
@@ -1779,7 +1862,7 @@ class InteractiveArrayPlotter:
         self.clear_edit_markers()
 
         # Get the line coordinates
-       
+
         line = self.drawn_lines_list[line_index]
         start_point, end_point = line
 
@@ -1937,7 +2020,7 @@ class InteractiveArrayPlotter:
         # Remove the line from our list
         self.drawn_lines_list.pop(selected_index)
 
-       
+
 
         # Update the listbox and redraw
         self.update_lines_listbox()
@@ -2120,7 +2203,7 @@ class InteractiveArrayPlotter:
 
 class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
     def __init__(self, root, hdf5data):
-        
+
         self.trace_x_index = 0
         self.trace_y_index = 0
 
@@ -2265,15 +2348,15 @@ class InteractiveTimeTraceMapPlotter(InteractiveArrayPlotter):
 import re
 class TracesFitter:
     """
-    A GUI application for fitting peak functions/distributions to 1D traces 
+    A GUI application for fitting peak functions/distributions to 1D traces
     """
 
     def __init__(self, data, master=None):
-        
+
         # Initialize trace indices
         self.trace_index_x = 0
         self.trace_index_y = 0
-        
+
         # Set up the main window
         if master is None:
             self.root = tk.Tk()
@@ -2283,26 +2366,26 @@ class TracesFitter:
             self.root = tk.Toplevel(master)
             self.root.title("Traces Fitter")
             # self.root.geometry("800x600")
-        
-        
+
+
         self.data = data
-        
+
         # Define available models
         self.models = {
             'G': [gaussian, ('x', 'a', 'mu', 'sigma')],
             'L': [lorentzian, ('x', 'a', 'x0', 'gamma', 'c')]
         }
-        
+
         self.fitted_params = [] # Store fitted parameters
         self.fit_results = [] # Store fit results
-        
+
         # Create matplotlib figure and axis
         self.fig = plt.Figure(figsize=(6, 5), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.ax.set_xlabel('x')
         self.ax.set_ylabel('y')
 
-        
+
     def create_widgets(self):
         """Create all GUI widgets for the fitter interface."""
         # Create main frame for layout
@@ -2346,7 +2429,7 @@ class TracesFitter:
         # Parameter frame
         param_frame = ttk.LabelFrame(self.model_frame, text="Initial Parameters")
         param_frame.grid(row=2, column=0, columnspan=2, sticky=tk.NSEW, padx=5, pady=10)
-        
+
         # Default parameters (a and b for linear model)
         self.param_vars = {}
         param_entries = {}
@@ -2372,25 +2455,25 @@ class TracesFitter:
         ttk.Label(self.model_frame, text="Max Function Evaluations (maxfev):").grid(row=6, column=0, sticky=tk.W, padx=5, pady=5)
         maxfev_entry = ttk.Entry(self.model_frame, textvariable=self.maxfev_var, width=10)
         maxfev_entry.grid(row=6, column=1, padx=5, pady=5)
-    
-        
+
+
         # Add spinboxes for selecting trace indices
         ttk.Label(self.model_frame, text="Trace X Index:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=5)
-        self.trace_x_index_var = tk.IntVar(value=0) 
+        self.trace_x_index_var = tk.IntVar(value=0)
         trace_x_spinbox = ttk.Spinbox(self.model_frame, from_=0, to=self.data.measure_dim[0]-1, textvariable=self.trace_x_index_var, width=10)
         trace_x_spinbox.grid(row=4, column=1, padx=5, pady=5)
         trace_x_spinbox.bind("<FocusOut>", lambda e: self.update_plot())
         trace_x_spinbox.bind("<Return>", lambda e: self.update_plot())
-        
+
         ttk.Label(self.model_frame, text="Trace Y Index:").grid(row=5, column=0, sticky=tk.W, padx=5, pady=5)
         self.trace_y_index_var = tk.IntVar(value=0)
         trace_y_spinbox = ttk.Spinbox(self.model_frame, from_=0, to=self.data.measure_dim[1]-1, textvariable=self.trace_y_index_var, width=10)
         trace_y_spinbox.grid(row=5, column=1, padx=5, pady=5)
         trace_y_spinbox.bind("<FocusOut>", lambda e: self.update_plot())
         trace_y_spinbox.bind("<Return>", lambda e: self.update_plot())
-        
+
         # Ensure the window is sized correctly before adding dynamic content
-        self.root.update()  
+        self.root.update()
         self.root.minsize(self.root.winfo_width(), self.root.winfo_height())
 
         # Function to update parameters when the model expression changes
@@ -2403,8 +2486,8 @@ class TracesFitter:
             expr = self.model_expr_var.get()
             params = set()
             dists = set()
-            
-            
+
+
             for match in re.finditer(r'\b([a-zA-Z](?!\w*\())\b', expr): # Match standalone variable names not followed by '('
                 param = match.group(1)
                 if param not in {'x', 'np', 'co', 'sp', 'L', 'G'}:  # Skip x variable, numpy, and L/G
@@ -2418,7 +2501,7 @@ class TracesFitter:
             param_entries.clear()
             self.dist_vars.clear()
             dist_entries.clear()
-            
+
             # Create separate frames for parameters and distributions
             param_subframe = ttk.Frame(param_frame)
             param_subframe.grid(row=0, column=0, columnspan=2, sticky=tk.NSEW)
@@ -2441,25 +2524,25 @@ class TracesFitter:
             for i, dist in enumerate(sorted(dists)):
                 dist_params = self.models[dist[0]][1]
                 self.dist_vars[dist] = [tk.DoubleVar(value=1.0) for _ in dist_params[1:]]  # Skip 'x' variable
-                
+
                 ttk.Label(dist_subframe, text=f"{dist}: ").grid(row=i, column=0, sticky=tk.W, padx=5, pady=5)
                 for j, param in enumerate(dist_params[1:]):
                     ttk.Label(dist_subframe, text=f"{param}:").grid(row=i, column=2*j+1, sticky=tk.W, padx=5, pady=5)
-                
+
                 dist_entries[param] = [ttk.Entry(dist_subframe, textvariable=self.dist_vars[dist][j], width=10).grid(row=i, column=2*j+2, padx=5, pady=5) for j, param in enumerate(dist_params[1:])]
-            
+
 
         # Bind the model expression entry to update parameters
         self.model_expr_var.trace_add("write", update_params)
-        
+
 
         # Add fit buttons
         preview_btn = ttk.Button(self.model_frame, text="Fit Preview", command=self.fit_preview_trace)
         preview_btn.grid(row=3, column=0, columnspan=2, pady=5, padx=5)
-    
+
     def get_one_index(self, trace_index_x, trace_index_y): # Convert 2D indices to 1D index
         return self.data.measure_dim[1] * trace_index_x + trace_index_y
-            
+
     def update_plot(self):
         """
         Update the plot with the selected trace and fitted curve if available.
@@ -2468,18 +2551,18 @@ class TracesFitter:
         self.trace_index = self.get_one_index(self.trace_x_index_var.get(), self.trace_y_index_var.get())
         self.trace_selected = self.data.trace_reference[::, 0, self.trace_index]
         self.times = self.data.traces_dt * np.arange(0, len(self.trace_selected))
-        
+
         self.ax.clear() # Clear previous plot
         self.ax.plot(self.times, self.trace_selected, label='Original Trace', color='blue')
         if hasattr(self, 'fit_y'):
             self.ax.plot(self.x_data, self.fit_y, label='Fitted Curve', color='red', linestyle='--')
         self.canvas.draw()
-    
+
     def fit_preview_trace(self):
         """
         Fit the currently selected trace and display the results.
         """
-        
+
         import time
         start_time = time.perf_counter()
         # Get the model expression and parameter values
@@ -2539,7 +2622,7 @@ class TracesFitter:
         # Generate fitted curve
         self.fit_y = model_func(self.x_data, *popt)
 
-        # Add the fitted curve 
+        # Add the fitted curve
         self.update_plot()
         self.canvas.draw()
 
@@ -2548,7 +2631,7 @@ class TracesFitter:
         for param, value in self.fit_params.items():
             result_text += f"{param} = {value:.6g}\n"
         result_text += f"\nFit time for preview trace: {elapsed:.3f} seconds\n"
-                
+
         # Estimate total time for all traces if possible
         num_traces = self.data.trace_reference.shape[2]
         total_estimate = elapsed * num_traces
@@ -2562,38 +2645,133 @@ class TracesFitter:
         """
         Fit the model to all traces and store the results.
         """
-        
-        self.fit_preview_trace()  # Fit the currently selected trace first to validate the model
 
-        fit_results = np.array([])
-        num_traces = self.data.trace_reference.shape[2]
+        # 1) Ensure model function + parameter order exist (and preview fit works)
+        self.fit_preview_trace()
 
-        # Create progress bar window
+        # 2) Determine sizes
+        trace_ref = self.data.trace_reference
+        try:
+            num_traces = int(trace_ref.shape[2])
+        except Exception as e:
+            raise RuntimeError(
+                "trace_reference must be indexable and have shape like (trace_len, 1, num_traces). "
+                f"Got shape={getattr(trace_ref, 'shape', None)}"
+            ) from e
+
+        n_params = len(self.all_param_names)
+        fit_results = np.full((num_traces, n_params), np.nan, dtype=float)
+
+        # 3) Progress window (UI thread)
         progress_win = tk.Toplevel(self.root)
         progress_win.title("Fitting Progress")
-        progress_win.geometry("400x100")
-        progress_label = tk.Label(progress_win, text="Fitting traces...")
-        progress_label.pack(padx=20, pady=10)
-        progress_var = tk.DoubleVar()
-        progress_bar = ttk.Progressbar(progress_win, variable=progress_var, maximum=num_traces, length=350)
-        progress_bar.pack(padx=20, pady=20, fill=tk.X)
+        progress_win.geometry("460x150")
+        progress_win.transient(self.root)
 
-        progress_win.update()  # Force window to appear before starting loop
-        for i in range(num_traces):
-            x_data, y_data = self.times, self.trace_selected
-            p0 = [self.fit_params[param] for param in self.all_param_names]
-            popt, pcov = optimize.curve_fit(self.model_func, x_data, y_data, p0=p0, maxfev=self.maxfev)
-            fit_results = np.append(fit_results, popt)
-            # Update progress bar
-            progress_var.set(i + 1)
-            progress_win.update()  # Update window and progress bar
+        progress_label_var = tk.StringVar(value="Preparing…")
+        ttk.Label(progress_win, textvariable=progress_label_var).pack(padx=20, pady=(15, 6), anchor="w")
 
-        progress_win.destroy()
-        self.fit_results = fit_results.reshape(-1, len(self.all_param_names))
-        self.fit_results_dict = {param: self.fit_results[:, idx] for idx, param in enumerate(self.all_param_names)}
-        return self.fit_results_dict
-        
-        
+        progress_var = tk.DoubleVar(value=0)
+        bar = ttk.Progressbar(progress_win, variable=progress_var, maximum=num_traces, length=400)
+        bar.pack(padx=20, pady=8, fill=tk.X)
+
+        cancel_flag = {"stop": False}
+
+        def on_cancel():
+            cancel_flag["stop"] = True
+            progress_label_var.set("Cancelling after current trace…")
+
+        cancel_btn = ttk.Button(progress_win, text="Cancel", command=on_cancel)
+        cancel_btn.pack(padx=20, pady=(0, 15), anchor="e")
+
+        # 4) Worker -> UI communication
+        msg_q: "queue.Queue[tuple]" = queue.Queue()
+
+        # Warm-start p0 from the preview fit params (stable order via self.all_param_names)
+        p0 = np.array([self.fit_params[name] for name in self.all_param_names], dtype=float)
+
+        def worker():
+            nonlocal p0
+            try:
+                x_data = np.asarray(self.times, dtype=float)
+
+                for i in range(num_traces):
+                    if cancel_flag["stop"]:
+                        msg_q.put(("done", "Cancelled."))
+                        return
+
+                    # Load the *current* trace (THIS is what makes it iterate over all traces)
+                    try:
+                        y_data = np.asarray(trace_ref[:, 0, i], dtype=float)
+                    except Exception:
+                        # Fallback if layout differs; try a simpler indexing (you can customize if needed)
+                        y_data = np.asarray(trace_ref[i], dtype=float).reshape(-1)
+
+                    try:
+                        popt, _pcov = optimize.curve_fit(
+                            self.model_func,
+                            x_data,
+                            y_data,
+                            p0=p0,
+                            maxfev=int(self.maxfev)
+                        )
+                        fit_results[i, :] = popt
+                        p0 = popt  # warm-start next fit
+
+                    except Exception as fit_err:
+                        # Keep NaNs for this trace and continue
+                        msg_q.put(("warn", f"Fit failed for trace {i + 1}/{num_traces}: {fit_err}"))
+
+                    # Throttle UI updates (too-frequent updates can slow things down)
+                    if (i % 5 == 0) or (i == num_traces - 1):
+                        msg_q.put(("progress", i + 1))
+
+                msg_q.put(("done", "Finished."))
+
+            except Exception as e:
+                msg_q.put(("error", f"Fatal error: {e}"))
+
+        def poll():
+            try:
+                while True:
+                    kind, payload = msg_q.get_nowait()
+
+                    if kind == "progress":
+                        progress_var.set(payload)
+                        progress_label_var.set(f"Fitting traces… {payload}/{num_traces}")
+                    elif kind == "warn":
+                        # Keep GUI responsive; warnings go to console
+                        print(payload)
+                    elif kind == "error":
+                        print(payload)
+                        progress_label_var.set("Error (see console).")
+                        cancel_btn.config(state=tk.DISABLED)
+                        progress_win.after(800, progress_win.destroy)
+                        return
+                    elif kind == "done":
+                        progress_label_var.set(payload)
+                        cancel_btn.config(state=tk.DISABLED)
+
+                        # Store results on the object
+                        self.fit_results = fit_results
+                        self.fit_results_dict = {
+                            name: self.fit_results[:, idx]
+                            for idx, name in enumerate(self.all_param_names)
+                        }
+
+                        progress_win.after(500, progress_win.destroy)
+                        return
+            except queue.Empty:
+                pass
+
+            progress_win.after(50, poll)
+
+        # 5) Start
+        threading.Thread(target=worker, daemon=True).start()
+        poll()
+        return None
+
+
 
 class UtilityLinePlotter:
     def __init__(self, master=None):
@@ -3058,5 +3236,4 @@ class UtilityLinePlotter:
 
         # Draw the canvas
         self.canvas.draw()
-
 
