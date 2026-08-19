@@ -38,7 +38,7 @@ plt.register_cmap(name='BlueMap', cmap=half_blue_map)
 plt.register_cmap(name='NeonPiCy', cmap=neon_cmap)
 rc('pdf', fonttype=42)
 
-#### a
+
 
 
 class InteractiveSlicePlotter:
