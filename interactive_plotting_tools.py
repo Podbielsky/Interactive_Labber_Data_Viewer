@@ -266,7 +266,8 @@ class InteractiveArrayPlotter:
         self.picked_line = None
 
         # Define interactive button options
-        self.colormaps = ['viridis', 'plasma', 'inferno', 'magma', 'cividis', 'twilight', 'BlueMap', 'RedMap' ,'coolwarm', 'Spectral',
+        self.colormaps = ['viridis', 'plasma', 'inferno', 'magma', 'cividis', 'twilight', 'twilight_shifted',
+                          'BlueMap', 'RedMap' ,'coolwarm', 'Spectral',
                           'gnuplot', 'NeonPiCy', 'BiMap']
         self.bg_methods = ['Polynomial', 'Median Difference', 'Mean of Lines', 'Relation Parameters',
                            'Subtract Trace Average']

@@ -4,7 +4,6 @@ Created on Mon Jun 17 17:23:55 2024
 
 @author: Nico Reinders
 """
-
 from matplotlib import pyplot as plt
 import numpy as np
 import Data_analysis_and_transforms as lib

@@ -1,14 +1,89 @@
-Installation Instruction for Windows Systems (19.02.2024, v0.4.4)
+Installation Instructions for Windows Systems (updated 19.08.2026)
 
-- Install a Version of Python 3.9 from the official Python webpage, make sure it is the 64-bit version
+------------ |
+Requirements |
+------------ |
+- A 64-bit Windows system
+- An internet connection during setup
+- Windows PowerShell
 
-- Be sure, that the Python folder is located in the %USERPROFILE%\AppData\Local\Programs directory and is called
-  Python39. Do not add the path to this python distribution to your system PATH to ensure no crosstalk between
-  already existing Python versions on your machine
+Installation
+->
+1. Keep set_up_labber_hdf5_GUI.bat, labber_hdf5_viewer.bat, the icons
+   folder, and all supplied Python files together in the same folder.
 
-- be sure that set_up_labber_hdf5_GUI.bat is in the same directory as all 5 python scripts
+2. Double-click set_up_labber_hdf5_GUI.bat. The setup script will:
+   - Look for Python 3.10 in
+     %USERPROFILE%\AppData\Local\Programs\Python\Python310.
+   - Automatically download and install the newest Python 3.10 version
+     with an official Windows installer if Python310 is not present.
+   - Create or update the Labber_View_GUI virtual environment.
+   - Install the required Python packages, including matplotlib 3.5.0.
+   - Copy the application files into the virtual environment.
+   - Create a "Labber HDF5 Viewer" shortcut on the current user's Desktop.
+     The shortcut uses icons\labber_viewer_ICON.ico as its icon.
 
-- click on the set_up_labber_hdf5_GUI.bat, it should execute in the windows command line tool.
+3. Wait until the setup window reports that the Desktop shortcut was
+   created successfully.
 
-- after it has finished you can execute the GUI script via clicking on labber_hdf5_viewer.bat, you can put the
-  file where you want (e.g your Desktop for easy access)
+Starting the viewer
+-->
+- Double-click the "Labber HDF5 Viewer" Desktop shortcut.
+- Alternatively, double-click labber_hdf5_viewer.bat.
+
+Notes
+--->
+- Python is installed only for the current user. Administrator rights
+  should not be required.
+- Python is not added to the system PATH, which avoids conflicts with
+  other installed Python versions.
+- Python 3.10.11 is used because it is the final Python 3.10 release with
+  an official Windows installer. Later Python 3.10 security releases are
+  source-only.
+
+
+Installation Instructions for macOS and Linux
+
+------------ |
+Requirements |
+------------ |
+- macOS 13 or newer, or a 64-bit glibc-based Linux system
+- An internet connection during setup
+- Bash and either curl or wget
+
+Installation
+->
+1. Keep set_up_labber_hdf5_GUI.sh, the icons folder, and all supplied
+   Python files together in the same folder.
+
+2. Open Terminal in that folder and run:
+
+   chmod +x set_up_labber_hdf5_GUI.sh
+   ./set_up_labber_hdf5_GUI.sh
+
+3. The setup script will:
+   - Install or update uv inside the current user's data folder.
+   - Install the newest available Python 3.10 patch release for the current
+     user. Administrator rights are not required.
+   - Create or update the Labber_View_GUI virtual environment.
+   - Install the required packages, including matplotlib 3.5.0.
+   - Copy the application and icon files into the user installation.
+   - On macOS, create "Labber HDF5 Viewer.app" on the Desktop.
+   - On Linux, create a Desktop shortcut and an application-menu entry.
+
+Starting the viewer
+-->
+- macOS: double-click "Labber HDF5 Viewer.app" on the Desktop.
+- Linux: double-click the Desktop shortcut or select "Labber HDF5 Viewer"
+  from the application menu.
+
+Notes
+--->
+- The user-local installation is stored below
+  ${XDG_DATA_HOME:-$HOME/.local/share}/Labber_View_GUI.
+- The setup uses uv-managed Python builds from Astral's
+  python-build-standalone project so that the same installer works without
+  sudo on both macOS and Linux.
+- Python is not added to the system PATH.
+- On Linux, the desktop environment may ask you to confirm "Allow Launching"
+  the first time the shortcut is used.

@@ -15,6 +15,27 @@ import traceback
 array_plotters = []
 list_name = ['Channels', 'Instrument config', 'Instruments', 'Log list', 'Settings', 'Step config', 'Step list', 'Tags', 'Views']
 
+
+def set_application_icon(window):
+    """Set the application icon in both source and installed layouts."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    icon_name = 'labber_viewer_ICON.png'
+    icon_paths = (
+        os.path.join(script_dir, 'icons', icon_name),
+        os.path.join(os.path.dirname(script_dir), 'icons', icon_name),
+    )
+
+    for icon_path in icon_paths:
+        if os.path.isfile(icon_path):
+            try:
+                icon_image = tk.PhotoImage(file=icon_path)
+                window.iconphoto(True, icon_image)
+                window._labber_icon_image = icon_image
+            except tk.TclError:
+                pass
+            return
+
+
 def data_menu_bar(root, hdf5data):
     menubar = tk.Menu(root)
     # Adding File Menu and commands
@@ -882,6 +903,7 @@ def main():
     # Create the Tkinter root window
     hdf5Data = HDF5Data(wdir=wdir)
     root = tk.Tk()
+    set_application_icon(root)
     data_bar = data_menu_bar(root, hdf5Data)
     root.config(menu=data_bar)
     root.title('HDF5 File Viewer')
