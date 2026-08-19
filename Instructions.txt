@@ -114,5 +114,12 @@ Checking for updates
 - Select Help > Check for Updates... to run the check manually at any time.
 - Select "Open comparison on GitHub" in the update window to view the complete
   comparison in a web browser.
-- The check requires an internet connection and does not install updates. Run
-  the newest setup script to update the application.
+- Select "Install update and restart" to download the changed application files
+  from the exact main-branch commit, install them, and restart the viewer.
+- Updates are validated before installation and are rolled back if replacing a
+  program file fails.
+- If requirements.txt changed, run the newest setup script instead so that the
+  Python environment and application files are updated together.
+- Automatic installation is disabled when running directly from a Git source
+  checkout to avoid overwriting local work. Update that checkout with Git.
+- Checking for and installing updates requires an internet connection.

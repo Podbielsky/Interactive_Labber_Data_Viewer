@@ -1,12 +1,15 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
+import datetime
 import json
 import queue
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 import webbrowser
 import ttkbootstrap as ttk
@@ -33,6 +36,10 @@ GITHUB_API_URL = f'https://api.github.com/repos/{GITHUB_REPOSITORY}'
 GITHUB_REPOSITORY_URL = f'https://github.com/{GITHUB_REPOSITORY}'
 VERSION_METADATA_FILE = 'labber_hdf5_viewer_version.json'
 UPDATE_CHECK_TIMEOUT_SECONDS = 10
+UPDATE_DOWNLOAD_TIMEOUT_SECONDS = 30
+UPDATE_SOURCE_DIRECTORY = 'source'
+UPDATE_ICON_DIRECTORY = 'icons'
+UPDATE_ICON_EXTENSIONS = {'.icns', '.ico', '.png'}
 PREFERENCES_FILE_NAME = 'preferences.json'
 PREFERENCES_DIRECTORY_NAME = 'Labber HDF5 Viewer'
 
@@ -228,6 +235,19 @@ def request_github_json(url):
         return json.load(response)
 
 
+def request_github_bytes(url):
+    """Download a repository file from GitHub."""
+    request = urllib.request.Request(
+        url,
+        headers={'User-Agent': 'Labber-HDF5-Viewer-Updater'},
+    )
+    with urllib.request.urlopen(
+        request,
+        timeout=UPDATE_DOWNLOAD_TIMEOUT_SECONDS,
+    ) as response:
+        return response.read()
+
+
 def fetch_update_information(installed_commit):
     """Compare an installed commit with the repository's main branch."""
     if not is_commit_sha(installed_commit):
@@ -281,6 +301,7 @@ def fetch_update_information(installed_commit):
     for file_entry in comparison.get('files') or []:
         changed_files.append({
             'filename': file_entry.get('filename', ''),
+            'previous_filename': file_entry.get('previous_filename', ''),
             'status': file_entry.get('status', 'modified'),
             'additions': file_entry.get('additions', 0),
             'deletions': file_entry.get('deletions', 0),
@@ -300,6 +321,274 @@ def fetch_update_information(installed_commit):
             f'{GITHUB_REPOSITORY_URL}/compare/{installed_commit}...{GITHUB_MAIN_BRANCH}',
         ),
     }
+
+
+def get_update_installation_layout(script_directory=None):
+    """Resolve source, icon, and launcher locations for this installation."""
+    if script_directory is None:
+        script_directory = os.path.dirname(os.path.abspath(__file__))
+    script_directory = os.path.abspath(script_directory)
+    parent_directory = os.path.dirname(script_directory)
+    uses_source_directory = os.path.basename(script_directory) == UPDATE_SOURCE_DIRECTORY
+
+    if uses_source_directory:
+        icon_directory = os.path.join(parent_directory, UPDATE_ICON_DIRECTORY)
+        launcher_path = os.path.join(parent_directory, 'labber_hdf5_viewer.bat')
+    else:
+        icon_directory = os.path.join(parent_directory, UPDATE_ICON_DIRECTORY)
+        local_icon_directory = os.path.join(script_directory, UPDATE_ICON_DIRECTORY)
+        if os.path.isdir(local_icon_directory):
+            icon_directory = local_icon_directory
+        launcher_path = os.path.join(script_directory, 'labber_hdf5_viewer.bat')
+
+    return {
+        'application_directory': script_directory,
+        'icon_directory': icon_directory,
+        'launcher_path': launcher_path,
+        'source_checkout': (
+            uses_source_directory
+            and os.path.exists(os.path.join(parent_directory, '.git'))
+        ),
+    }
+
+
+def normalize_repository_path(repository_path):
+    """Return a safe, normalized repository-relative path."""
+    if not isinstance(repository_path, str):
+        return None
+    normalized_path = repository_path.replace('\\', '/').strip('/')
+    path_parts = normalized_path.split('/')
+    if not normalized_path or any(part in ('', '.', '..') for part in path_parts):
+        return None
+    return normalized_path
+
+
+def get_update_target(repository_path, installation_layout):
+    """Map an updateable repository file to its installed destination."""
+    repository_path = normalize_repository_path(repository_path)
+    if repository_path is None:
+        return None
+
+    path_parts = repository_path.split('/')
+    if (
+        len(path_parts) == 2
+        and path_parts[0] == UPDATE_SOURCE_DIRECTORY
+        and path_parts[1].lower().endswith('.py')
+    ):
+        return os.path.join(
+            installation_layout['application_directory'], path_parts[1]
+        )
+
+    if (
+        len(path_parts) == 2
+        and path_parts[0] == UPDATE_ICON_DIRECTORY
+        and os.path.splitext(path_parts[1])[1].lower() in UPDATE_ICON_EXTENSIONS
+    ):
+        return os.path.join(installation_layout['icon_directory'], path_parts[1])
+
+    if repository_path == 'labber_hdf5_viewer.bat' and os.name == 'nt':
+        return installation_layout['launcher_path']
+
+    return None
+
+
+def update_changes_require_setup(update_information):
+    """Return whether the update changes the Python environment definition."""
+    return any(
+        normalize_repository_path(file_entry.get('filename')) == 'requirements.txt'
+        for file_entry in update_information.get('changed_files', [])
+    )
+
+
+def get_update_installation_block_reason(update_information, script_directory=None):
+    """Explain why this update cannot be installed automatically, if applicable."""
+    if update_information.get('status') != 'ahead':
+        return (
+            'Automatic installation is only available when the installed '
+            'version is directly behind the main branch.'
+        )
+    if update_changes_require_setup(update_information):
+        return (
+            'This update changes requirements.txt. Run the newest setup script '
+            'so that Python packages and program files are updated together.'
+        )
+    if get_update_installation_layout(script_directory)['source_checkout']:
+        return (
+            'Automatic installation is disabled for Git source checkouts because '
+            'it would overwrite the working tree. Update the checkout with Git, '
+            'then run the setup script.'
+        )
+    return None
+
+
+def build_update_operations(update_information, installation_layout):
+    """Build deduplicated replace/delete operations for installed program files."""
+    operations_by_target = {}
+
+    def add_operation(repository_path, action):
+        normalized_path = normalize_repository_path(repository_path)
+        target_path = get_update_target(normalized_path, installation_layout)
+        if normalized_path is None or target_path is None:
+            return
+        operations_by_target[os.path.normcase(target_path)] = {
+            'repository_path': normalized_path,
+            'target_path': target_path,
+            'action': action,
+        }
+
+    for file_entry in update_information.get('changed_files', []):
+        status = file_entry.get('status', 'modified')
+        repository_path = file_entry.get('filename')
+
+        if status == 'renamed':
+            add_operation(file_entry.get('previous_filename'), 'delete')
+
+        add_operation(
+            repository_path,
+            'delete' if status == 'removed' else 'replace',
+        )
+
+    return list(operations_by_target.values())
+
+
+def get_raw_repository_file_url(commit_sha, repository_path):
+    """Return the raw GitHub URL for one file at an exact commit."""
+    quoted_repository = urllib.parse.quote(GITHUB_REPOSITORY, safe='/')
+    quoted_commit = urllib.parse.quote(commit_sha, safe='')
+    quoted_path = urllib.parse.quote(repository_path, safe='/')
+    return (
+        f'https://raw.githubusercontent.com/{quoted_repository}/'
+        f'{quoted_commit}/{quoted_path}'
+    )
+
+
+def write_update_metadata(metadata_path, commit_sha, staging_directory):
+    """Stage metadata identifying the exact commit being installed."""
+    metadata = {
+        'repository': GITHUB_REPOSITORY,
+        'branch': GITHUB_MAIN_BRANCH,
+        'commit': commit_sha,
+        'source': 'in-application-update',
+        'installed_at': datetime.datetime.now(
+            datetime.timezone.utc
+        ).isoformat(),
+    }
+    staged_path = os.path.join(staging_directory, 'version-metadata.new')
+    with open(staged_path, 'w', encoding='utf-8') as metadata_file:
+        json.dump(metadata, metadata_file, indent=2)
+        metadata_file.write('\n')
+    return {
+        'repository_path': VERSION_METADATA_FILE,
+        'target_path': metadata_path,
+        'action': 'replace',
+        'staged_path': staged_path,
+    }
+
+
+def apply_staged_update_operations(operations, staging_directory):
+    """Apply staged files atomically and roll back the transaction on failure."""
+    backup_directory = os.path.join(staging_directory, 'backups')
+    os.makedirs(backup_directory, exist_ok=True)
+    applied_operations = []
+
+    try:
+        for index, operation in enumerate(operations):
+            target_path = operation['target_path']
+            target_directory = os.path.dirname(target_path)
+            os.makedirs(target_directory, exist_ok=True)
+
+            target_existed = os.path.lexists(target_path)
+            backup_path = None
+            if target_existed:
+                if not os.path.isfile(target_path):
+                    raise OSError(f'Update target is not a regular file: {target_path}')
+                backup_path = os.path.join(backup_directory, f'{index:04d}.backup')
+                shutil.copy2(target_path, backup_path)
+
+            if operation['action'] == 'delete':
+                if target_existed:
+                    os.remove(target_path)
+            else:
+                os.replace(operation['staged_path'], target_path)
+
+            applied_operations.append((target_path, backup_path))
+    except Exception:
+        for target_path, backup_path in reversed(applied_operations):
+            try:
+                if backup_path is None:
+                    if os.path.isfile(target_path):
+                        os.remove(target_path)
+                else:
+                    os.replace(backup_path, target_path)
+            except OSError:
+                pass
+        raise
+
+
+def install_program_update(update_information, script_directory=None):
+    """Download and transactionally install program files from one commit."""
+    latest_commit = update_information.get('latest_commit')
+    if not is_commit_sha(latest_commit):
+        raise ValueError('The update does not contain a valid commit SHA.')
+    latest_commit = latest_commit.lower()
+
+    installation_layout = get_update_installation_layout(script_directory)
+    block_reason = get_update_installation_block_reason(
+        update_information, script_directory
+    )
+    if block_reason is not None:
+        raise RuntimeError(block_reason)
+
+    operations = build_update_operations(update_information, installation_layout)
+    entry_script_path = os.path.join(
+        installation_layout['application_directory'],
+        os.path.basename(os.path.abspath(__file__)),
+    )
+    if any(
+        operation['target_path'] == entry_script_path
+        and operation['action'] == 'delete'
+        for operation in operations
+    ):
+        raise RuntimeError('The update removes the application entry point.')
+
+    staging_directory = tempfile.mkdtemp(
+        prefix='.labber-update-',
+        dir=installation_layout['application_directory'],
+    )
+    try:
+        for index, operation in enumerate(operations):
+            if operation['action'] == 'delete':
+                continue
+
+            repository_path = operation['repository_path']
+            file_data = request_github_bytes(
+                get_raw_repository_file_url(latest_commit, repository_path)
+            )
+            if repository_path.lower().endswith('.py'):
+                compile(file_data, repository_path, 'exec')
+
+            staged_path = os.path.join(staging_directory, f'{index:04d}.new')
+            with open(staged_path, 'wb') as staged_file:
+                staged_file.write(file_data)
+            operation['staged_path'] = staged_path
+
+        metadata_path = os.path.join(
+            installation_layout['application_directory'], VERSION_METADATA_FILE
+        )
+        operations.append(
+            write_update_metadata(
+                metadata_path, latest_commit, staging_directory
+            )
+        )
+        apply_staged_update_operations(operations, staging_directory)
+    finally:
+        shutil.rmtree(staging_directory, ignore_errors=True)
+
+    return [
+        operation['repository_path']
+        for operation in operations
+        if operation['repository_path'] != VERSION_METADATA_FILE
+    ]
 
 
 def format_update_report(update_information):
@@ -353,9 +642,10 @@ def show_update_dialog(root, update_information):
     """Display available commits and files in a scrollable dialog."""
     dialog = ttk.Toplevel(root)
     dialog.title('Labber HDF5 Viewer Update Available')
-    dialog.geometry('780x560')
+    dialog.geometry('780x610')
     dialog.minsize(620, 420)
     dialog.transient(root)
+    set_application_icon(dialog)
 
     ttk.Label(
         dialog,
@@ -381,6 +671,26 @@ def show_update_dialog(root, update_information):
     report_text.insert(tk.END, format_update_report(update_information))
     report_text.configure(state=tk.DISABLED)
 
+    installation_block_reason = get_update_installation_block_reason(
+        update_information
+    )
+    status_variable = tk.StringVar(
+        master=dialog,
+        value=(
+            installation_block_reason
+            or 'The update can be installed directly into this application.'
+        ),
+    )
+    ttk.Label(
+        dialog,
+        textvariable=status_variable,
+        bootstyle='warning' if installation_block_reason else 'secondary',
+        wraplength=730,
+    ).pack(fill=tk.X, padx=16, pady=(4, 2))
+
+    progress_bar = ttk.Progressbar(dialog, mode='indeterminate')
+    progress_bar.pack(fill=tk.X, padx=16, pady=(0, 8))
+
     button_frame = ttk.Frame(dialog)
     button_frame.pack(fill=tk.X, padx=16, pady=(0, 16))
     ttk.Button(
@@ -389,12 +699,158 @@ def show_update_dialog(root, update_information):
         command=lambda: webbrowser.open(update_information['compare_url']),
         bootstyle='primary',
     ).pack(side=tk.LEFT)
-    ttk.Button(
+    install_button = ttk.Button(
+        button_frame,
+        text='Install update and restart',
+        bootstyle='success',
+    )
+    install_button.pack(side=tk.LEFT, padx=(8, 0))
+    close_button = ttk.Button(
         button_frame,
         text='Close',
         command=dialog.destroy,
         bootstyle='secondary',
-    ).pack(side=tk.RIGHT)
+    )
+    close_button.pack(side=tk.RIGHT)
+    install_button.configure(
+        command=lambda: install_update_from_dialog(
+            root,
+            dialog,
+            update_information,
+            install_button,
+            close_button,
+            progress_bar,
+            status_variable,
+        )
+    )
+    if installation_block_reason:
+        install_button.configure(state=tk.DISABLED)
+
+
+def restart_application(root):
+    """Close this process and launch the updated entry script."""
+    script_directory = os.path.dirname(os.path.abspath(__file__))
+    restart_command = [
+        sys.executable,
+        os.path.abspath(__file__),
+        *sys.argv[1:],
+    ]
+    helper_code = (
+        'import json, subprocess, sys, time\n'
+        'time.sleep(1.0)\n'
+        'subprocess.Popen(json.loads(sys.argv[1]), '
+        'cwd=sys.argv[2], close_fds=True)\n'
+    )
+    helper_command = [
+        sys.executable,
+        '-c',
+        helper_code,
+        json.dumps(restart_command),
+        script_directory,
+    ]
+    popen_options = {
+        'cwd': script_directory,
+        'close_fds': True,
+    }
+    if os.name == 'nt':
+        popen_options['creationflags'] = (
+            getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+            | getattr(subprocess, 'DETACHED_PROCESS', 0)
+        )
+    else:
+        popen_options['start_new_session'] = True
+
+    try:
+        subprocess.Popen(helper_command, **popen_options)
+    except OSError as error:
+        messagebox.showerror(
+            'Restart Failed',
+            f'The update was installed, but the viewer could not restart:\n{error}\n\n'
+            'Please start the viewer again manually.',
+            parent=root,
+        )
+        return
+
+    close_application = getattr(root, '_labber_close_application', root.destroy)
+    close_application()
+
+
+def install_update_from_dialog(
+    root,
+    dialog,
+    update_information,
+    install_button,
+    close_button,
+    progress_bar,
+    status_variable,
+):
+    """Install an available update in a worker and restart after success."""
+    if getattr(root, '_labber_update_install_running', False):
+        return
+
+    if not messagebox.askyesno(
+        'Install Update',
+        'Download the changed program files, install them, and restart the viewer?',
+        parent=dialog,
+    ):
+        return
+
+    root._labber_update_install_running = True
+    root.configure(cursor='watch')
+    install_button.configure(state=tk.DISABLED)
+    close_button.configure(state=tk.DISABLED)
+    dialog.protocol('WM_DELETE_WINDOW', lambda: None)
+    status_variable.set('Downloading and validating the update...')
+    progress_bar.start(12)
+    result_queue = queue.Queue(maxsize=1)
+
+    def update_worker():
+        try:
+            updated_paths = install_program_update(update_information)
+            result_queue.put(('success', updated_paths))
+        except Exception as error:
+            result_queue.put(('error', error))
+
+    def finish_update_installation():
+        try:
+            result_type, result = result_queue.get_nowait()
+        except queue.Empty:
+            try:
+                root.after(100, finish_update_installation)
+            except tk.TclError:
+                pass
+            return
+
+        root._labber_update_install_running = False
+        root.configure(cursor='')
+        progress_bar.stop()
+
+        if result_type == 'error':
+            install_button.configure(state=tk.NORMAL)
+            close_button.configure(state=tk.NORMAL)
+            dialog.protocol('WM_DELETE_WINDOW', dialog.destroy)
+            status_variable.set('The update was not installed.')
+            messagebox.showerror(
+                'Update Installation Failed',
+                f'Could not install the update:\n{result}',
+                parent=dialog,
+            )
+            return
+
+        file_count = len(result)
+        if file_count:
+            status_variable.set(
+                f'Installed {file_count} changed program file(s). Restarting...'
+            )
+        else:
+            status_variable.set(
+                'No runtime files changed; the installed version was updated. '
+                'Restarting...'
+            )
+        root.after(500, lambda: restart_application(root))
+
+    threading.Thread(target=update_worker, daemon=True).start()
+    root.after(100, finish_update_installation)
 
 
 def check_for_updates(root, silent_if_current=False):
@@ -1424,9 +1880,20 @@ def main():
     global wdir
 
     def on_close():
-        if os.path.exists(wdir):
-            shutil.rmtree(wdir)
-        root.destroy()
+        if getattr(root, '_labber_update_install_running', False):
+            messagebox.showinfo(
+                'Update In Progress',
+                'Please wait until the update installation has finished.',
+                parent=root,
+            )
+            return
+        try:
+            if os.path.exists(wdir):
+                shutil.rmtree(wdir)
+        except OSError as error:
+            print(f'Could not remove the working directory during shutdown: {error}')
+        finally:
+            root.destroy()
 
     # Set wdir as a sub-folder in the script directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1442,6 +1909,7 @@ def main():
     root.config(menu=data_bar)
     root.title('HDF5 File Viewer')
     root.protocol("WM_DELETE_WINDOW", on_close)
+    root._labber_close_application = on_close
     tree = display_hdf5_file(root, hdf5Data)
     root.after(2000, lambda: check_for_updates(root, silent_if_current=True))
     root.mainloop()
