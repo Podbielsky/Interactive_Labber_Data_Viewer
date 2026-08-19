@@ -28,6 +28,8 @@ LABBER_INSTALL_ROOT="$LABBER_USER_DATA_DIR/Labber_View_GUI"
 LABBER_VENV_DIR="$LABBER_INSTALL_ROOT/venv"
 LABBER_APP_DIR="$LABBER_INSTALL_ROOT/app"
 LABBER_ICON_DIR="$LABBER_INSTALL_ROOT/icons"
+LABBER_VERSION_FILE="$LABBER_APP_DIR/labber_hdf5_viewer_version.json"
+LABBER_GITHUB_REPOSITORY="Podbielsky/Interactive_Labber_Data_Viewer"
 LABBER_UV_INSTALL_DIR="$LABBER_INSTALL_ROOT/tools"
 LABBER_UV_BIN="$LABBER_UV_INSTALL_DIR/uv"
 LABBER_TEMP_DIR=""
@@ -142,7 +144,7 @@ printf 'Installing required packages...\n'
     "matplotlib==3.5.0" \
     "numba==0.58.1" \
     h5py \
-    tkinterdnd2 \
+    "tkinterdnd2==0.6.2" \
     "ttkbootstrap==2.2.2"
 
 "$LABBER_VENV_DIR/bin/python" -c \
@@ -154,6 +156,42 @@ for LABBER_APPLICATION_FILE in "${LABBER_APPLICATION_FILES[@]}"; do
         "$LABBER_SOURCE_DIR/$LABBER_APPLICATION_FILE" \
         "$LABBER_APP_DIR/$LABBER_APPLICATION_FILE"
 done
+
+printf 'Recording the installed Git commit...\n'
+LABBER_INSTALLED_COMMIT=""
+LABBER_VERSION_SOURCE=""
+
+if [[ -e "$LABBER_SCRIPT_DIR/.git" ]] && command -v git >/dev/null 2>&1; then
+    LABBER_INSTALLED_COMMIT="$(
+        git -C "$LABBER_SCRIPT_DIR" rev-parse HEAD 2>/dev/null || true
+    )"
+    if [[ "$LABBER_INSTALLED_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+        LABBER_VERSION_SOURCE="git-checkout"
+    fi
+fi
+
+if [[ ! "$LABBER_INSTALLED_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    LABBER_INSTALLED_COMMIT="$(
+        "$LABBER_VENV_DIR/bin/python" -c \
+            'import json, urllib.request; request = urllib.request.Request("https://api.github.com/repos/Podbielsky/Interactive_Labber_Data_Viewer/commits/main", headers={"Accept": "application/vnd.github+json", "User-Agent": "Labber-HDF5-Viewer-Installer", "X-GitHub-Api-Version": "2022-11-28"}); print(json.load(urllib.request.urlopen(request, timeout=10))["sha"])' \
+            2>/dev/null || true
+    )"
+    if [[ "$LABBER_INSTALLED_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+        LABBER_VERSION_SOURCE="github-main-at-install"
+    else
+        LABBER_INSTALLED_COMMIT=""
+        LABBER_VERSION_SOURCE="unknown"
+        printf 'Warning: the installed Git commit could not be determined.\n' >&2
+    fi
+fi
+
+env \
+    LABBER_VERSION_COMMIT="$LABBER_INSTALLED_COMMIT" \
+    LABBER_VERSION_SOURCE="$LABBER_VERSION_SOURCE" \
+    LABBER_VERSION_FILE="$LABBER_VERSION_FILE" \
+    LABBER_VERSION_REPOSITORY="$LABBER_GITHUB_REPOSITORY" \
+    "$LABBER_VENV_DIR/bin/python" -c \
+    'import datetime, json, os; metadata = {"repository": os.environ["LABBER_VERSION_REPOSITORY"], "branch": "main", "commit": os.environ["LABBER_VERSION_COMMIT"], "source": os.environ["LABBER_VERSION_SOURCE"], "installed_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}; file = open(os.environ["LABBER_VERSION_FILE"], "w", encoding="utf-8"); json.dump(metadata, file, indent=2); file.write("\n"); file.close()'
 
 install -m 0644 "$LABBER_SCRIPT_DIR/icons/labber_viewer_ICON.icns" \
     "$LABBER_ICON_DIR/labber_viewer_ICON.icns"

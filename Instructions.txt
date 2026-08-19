@@ -20,6 +20,7 @@ Installation
    - Create or update the Labber_View_GUI virtual environment.
    - Install the required Python packages, including matplotlib 3.5.0.
    - Copy the application files into the virtual environment.
+   - Record the installed Git commit for update checks.
    - Create a "Labber HDF5 Viewer" shortcut on the current user's Desktop.
      The shortcut uses icons\labber_viewer_ICON.ico as its icon.
 
@@ -68,6 +69,7 @@ Installation
    - Create or update the Labber_View_GUI virtual environment.
    - Install the required packages, including matplotlib 3.5.0.
    - Copy the application and icon files into the user installation.
+   - Record the installed Git commit for update checks.
    - On macOS, create "Labber HDF5 Viewer.app" on the Desktop.
    - On Linux, create a Desktop shortcut and an application-menu entry.
 
@@ -94,3 +96,22 @@ Changing the interface style
 - Open the Style menu next to File, Data, and Plotting.
 - Choose a theme from the Light or Dark submenu.
 - The selected theme is applied immediately to all open viewer windows.
+
+
+Opening HDF5 files with drag and drop
+-->
+- Drag one .hdf5 or .h5 file from the file manager onto the HDF5 file tree.
+- The viewer validates and opens the dropped file immediately.
+- Drop only one file at a time. Files with spaces in their names are supported.
+
+
+Checking for updates
+-->
+- The viewer silently checks the repository's main branch shortly after startup.
+- If newer commits are available, a window displays their commit messages and
+  the changed-file summary compared with the installed commit.
+- Select Help > Check for Updates... to run the check manually at any time.
+- Select "Open comparison on GitHub" in the update window to view the complete
+  comparison in a web browser.
+- The check requires an internet connection and does not install updates. Run
+  the newest setup script to update the application.

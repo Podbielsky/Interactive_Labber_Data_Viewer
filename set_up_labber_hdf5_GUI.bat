@@ -40,6 +40,9 @@ set "LABBER_SHORTCUT_TARGET=%ENV_NAME%\Scripts\labber_hdf5_viewer.bat"
 set "LABBER_ICON_DIR=%ENV_NAME%\icons"
 set "LABBER_SHORTCUT_ICON=%LABBER_ICON_DIR%\labber_viewer_ICON.ico"
 set "LABBER_SHORTCUT_WORKING_DIR=%ENV_NAME%\Scripts"
+set "LABBER_SOURCE_ROOT=%~dp0"
+set "LABBER_VERSION_FILE=%ENV_NAME%\Scripts\labber_hdf5_viewer_version.json"
+set "LABBER_GITHUB_REPOSITORY=Podbielsky/Interactive_Labber_Data_Viewer"
 
 REM Create a new virtual environment using Python 3.10
 "%PYTHON_EXE%" -m venv "%ENV_NAME%"
@@ -60,7 +63,7 @@ IF EXIST "%ENV_NAME%\Scripts\activate.bat" (
 
     REM Install required packages
     echo Installing required packages...
-    "%ENV_NAME%\Scripts\python.exe" -m pip install numpy==1.22.4 scipy==1.7.3 matplotlib==3.5.0 numba==0.58.1 h5py tkinterdnd2 ttkbootstrap==2.2.2
+    "%ENV_NAME%\Scripts\python.exe" -m pip install numpy==1.22.4 scipy==1.7.3 matplotlib==3.5.0 numba==0.58.1 h5py tkinterdnd2==0.6.2 ttkbootstrap==2.2.2
 
     IF ERRORLEVEL 1 (
         echo Failed to install one or more required packages.
@@ -82,6 +85,14 @@ IF EXIST "%ENV_NAME%\Scripts\activate.bat" (
     IF ERRORLEVEL 1 (
         echo Failed to copy labber_hdf5_viewer.bat.
         GOTO :END
+    )
+
+    REM Record the installed commit for the in-application update checker.
+    echo Recording the installed Git commit...
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $commit = ''; $versionSource = 'unknown'; $gitCommand = Get-Command git.exe -ErrorAction SilentlyContinue; $gitMetadata = Join-Path $env:LABBER_SOURCE_ROOT '.git'; if ($gitCommand -and (Test-Path -LiteralPath $gitMetadata)) { try { $candidate = & $gitCommand.Source -C $env:LABBER_SOURCE_ROOT rev-parse HEAD 2>$null | Select-Object -First 1; if ($candidate) { $candidate = $candidate.Trim() }; if ($candidate -match '^[0-9a-fA-F]{40}$') { $commit = $candidate.ToLower(); $versionSource = 'git-checkout' } } catch {} }; if ($commit -notmatch '^[0-9a-f]{40}$') { try { $headers = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'Labber-HDF5-Viewer-Installer'; 'X-GitHub-Api-Version' = '2022-11-28' }; $response = Invoke-RestMethod -Uri ('https://api.github.com/repos/' + $env:LABBER_GITHUB_REPOSITORY + '/commits/main') -Headers $headers -TimeoutSec 10; if ($response.sha -match '^[0-9a-fA-F]{40}$') { $commit = $response.sha.ToLower(); $versionSource = 'github-main-at-install' } } catch {} }; $metadata = [ordered]@{ repository = $env:LABBER_GITHUB_REPOSITORY; branch = 'main'; commit = $commit; source = $versionSource; installed_at = (Get-Date).ToUniversalTime().ToString('o') }; $metadata | ConvertTo-Json | Set-Content -LiteralPath $env:LABBER_VERSION_FILE -Encoding UTF8; if ($commit -notmatch '^[0-9a-f]{40}$') { Write-Warning 'The installed Git commit could not be determined.' }"
+
+    IF ERRORLEVEL 1 (
+        echo Warning: version metadata could not be written.
     )
 
     IF NOT EXIST "%LABBER_ICON_DIR%" mkdir "%LABBER_ICON_DIR%"

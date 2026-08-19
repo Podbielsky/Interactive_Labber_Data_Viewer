@@ -1,6 +1,15 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
+import json
+import queue
+import re
+import subprocess
+import threading
+import urllib.error
+import urllib.request
+import webbrowser
 import ttkbootstrap as ttk
+from tkinterdnd2 import COPY, DND_FILES, REFUSE_DROP, TkinterDnD
 import h5py
 import numpy as np
 import os
@@ -16,6 +25,13 @@ import traceback
 array_plotters = []
 list_name = ['Channels', 'Instrument config', 'Instruments', 'Log list', 'Settings', 'Step config', 'Step list', 'Tags', 'Views']
 DEFAULT_THEME = 'bootstrap-light'
+HDF5_FILE_EXTENSIONS = {'.h5', '.hdf5'}
+GITHUB_REPOSITORY = 'Podbielsky/Interactive_Labber_Data_Viewer'
+GITHUB_MAIN_BRANCH = 'main'
+GITHUB_API_URL = f'https://api.github.com/repos/{GITHUB_REPOSITORY}'
+GITHUB_REPOSITORY_URL = f'https://github.com/{GITHUB_REPOSITORY}'
+VERSION_METADATA_FILE = 'labber_hdf5_viewer_version.json'
+UPDATE_CHECK_TIMEOUT_SECONDS = 10
 
 
 def set_application_icon(window):
@@ -77,6 +93,308 @@ def add_style_menu(root, menubar):
     root._labber_theme_variable = theme_variable
 
 
+def is_commit_sha(value):
+    """Return whether value is a complete Git commit SHA."""
+    return isinstance(value, str) and re.fullmatch(r'[0-9a-fA-F]{40}', value) is not None
+
+
+def get_installed_commit():
+    """Read the installed commit metadata or fall back to a source checkout."""
+    script_directory = os.path.dirname(os.path.abspath(__file__))
+    metadata_paths = (
+        os.path.join(script_directory, VERSION_METADATA_FILE),
+        os.path.join(os.path.dirname(script_directory), VERSION_METADATA_FILE),
+    )
+
+    for metadata_path in metadata_paths:
+        if not os.path.isfile(metadata_path):
+            continue
+        try:
+            with open(metadata_path, 'r', encoding='utf-8-sig') as metadata_file:
+                metadata = json.load(metadata_file)
+            commit = metadata.get('commit')
+            if is_commit_sha(commit):
+                return commit.lower()
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+
+    repository_directory = os.path.dirname(script_directory)
+    if not os.path.exists(os.path.join(repository_directory, '.git')):
+        return None
+
+    try:
+        result = subprocess.run(
+            ['git', '-C', repository_directory, 'rev-parse', 'HEAD'],
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    commit = result.stdout.strip()
+    return commit.lower() if is_commit_sha(commit) else None
+
+
+def request_github_json(url):
+    """Request JSON from the public GitHub API."""
+    request = urllib.request.Request(
+        url,
+        headers={
+            'Accept': 'application/vnd.github+json',
+            'User-Agent': 'Labber-HDF5-Viewer',
+            'X-GitHub-Api-Version': '2022-11-28',
+        },
+    )
+    with urllib.request.urlopen(
+        request,
+        timeout=UPDATE_CHECK_TIMEOUT_SECONDS,
+    ) as response:
+        return json.load(response)
+
+
+def fetch_update_information(installed_commit):
+    """Compare an installed commit with the repository's main branch."""
+    if not is_commit_sha(installed_commit):
+        raise ValueError('The installed version does not contain a valid commit SHA.')
+
+    branch_commit = request_github_json(
+        f'{GITHUB_API_URL}/commits/{GITHUB_MAIN_BRANCH}'
+    )
+    if not isinstance(branch_commit, dict):
+        raise ValueError('GitHub returned an unexpected main-branch response.')
+
+    latest_commit = branch_commit.get('sha')
+    if not is_commit_sha(latest_commit):
+        raise ValueError('GitHub did not return a valid main-branch commit SHA.')
+    latest_commit = latest_commit.lower()
+    installed_commit = installed_commit.lower()
+
+    if installed_commit == latest_commit:
+        return {
+            'status': 'identical',
+            'ahead_by': 0,
+            'behind_by': 0,
+            'total_commits': 0,
+            'installed_commit': installed_commit,
+            'latest_commit': latest_commit,
+            'commits': [],
+            'changed_files': [],
+            'compare_url': f'{GITHUB_REPOSITORY_URL}/commits/{GITHUB_MAIN_BRANCH}',
+        }
+
+    compare_api_url = (
+        f'{GITHUB_API_URL}/compare/{installed_commit}...{latest_commit}'
+    )
+    comparison = request_github_json(compare_api_url)
+    if not isinstance(comparison, dict):
+        raise ValueError('GitHub returned an unexpected update response.')
+
+    commits = []
+    for commit_entry in comparison.get('commits') or []:
+        commit_details = commit_entry.get('commit') or {}
+        author_details = commit_details.get('author') or {}
+        commits.append({
+            'sha': commit_entry.get('sha', ''),
+            'message': commit_details.get('message', '').strip(),
+            'author': author_details.get('name', 'Unknown author'),
+            'date': author_details.get('date', ''),
+            'url': commit_entry.get('html_url', ''),
+        })
+
+    changed_files = []
+    for file_entry in comparison.get('files') or []:
+        changed_files.append({
+            'filename': file_entry.get('filename', ''),
+            'status': file_entry.get('status', 'modified'),
+            'additions': file_entry.get('additions', 0),
+            'deletions': file_entry.get('deletions', 0),
+        })
+
+    return {
+        'status': comparison.get('status', 'unknown'),
+        'ahead_by': int(comparison.get('ahead_by') or 0),
+        'behind_by': int(comparison.get('behind_by') or 0),
+        'total_commits': int(comparison.get('total_commits') or 0),
+        'installed_commit': installed_commit,
+        'latest_commit': latest_commit,
+        'commits': commits,
+        'changed_files': changed_files,
+        'compare_url': comparison.get(
+            'html_url',
+            f'{GITHUB_REPOSITORY_URL}/compare/{installed_commit}...{GITHUB_MAIN_BRANCH}',
+        ),
+    }
+
+
+def format_update_report(update_information):
+    """Format commit messages and changed files for the update dialog."""
+    installed_commit = update_information['installed_commit']
+    latest_commit = update_information['latest_commit']
+    ahead_by = update_information['ahead_by']
+    commits = update_information['commits']
+    changed_files = update_information['changed_files']
+
+    lines = [
+        f'{ahead_by} newer commit(s) are available on {GITHUB_MAIN_BRANCH}.',
+        '',
+        f'Installed commit: {installed_commit}',
+        f'Latest main commit: {latest_commit}',
+        '',
+        'Commits:',
+    ]
+
+    for index, commit in enumerate(commits, start=1):
+        commit_sha = commit['sha'][:7] if commit['sha'] else 'unknown'
+        commit_date = commit['date'][:10] if commit['date'] else 'unknown date'
+        message_lines = commit['message'].splitlines() or ['No commit message']
+        lines.append(
+            f'{index}. {commit_sha} — {message_lines[0]} '
+            f'({commit["author"]}, {commit_date})'
+        )
+        for message_line in message_lines[1:]:
+            if message_line.strip():
+                lines.append(f'   {message_line}')
+
+    omitted_commits = max(0, ahead_by - len(commits))
+    if omitted_commits:
+        lines.extend([
+            '',
+            f'{omitted_commits} additional commit(s) are available on GitHub.',
+        ])
+
+    if changed_files:
+        lines.extend(['', 'Changed files:'])
+        for file_entry in changed_files:
+            lines.append(
+                f'- {file_entry["filename"]} [{file_entry["status"]}; '
+                f'+{file_entry["additions"]}/-{file_entry["deletions"]}]'
+            )
+
+    return '\n'.join(lines)
+
+
+def show_update_dialog(root, update_information):
+    """Display available commits and files in a scrollable dialog."""
+    dialog = ttk.Toplevel(root)
+    dialog.title('Labber HDF5 Viewer Update Available')
+    dialog.geometry('780x560')
+    dialog.minsize(620, 420)
+    dialog.transient(root)
+
+    ttk.Label(
+        dialog,
+        text='A newer version is available',
+        font=('TkDefaultFont', 14, 'bold'),
+        bootstyle='primary',
+    ).pack(anchor='w', padx=16, pady=(16, 8))
+
+    report_frame = ttk.Frame(dialog)
+    report_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=8)
+    report_frame.rowconfigure(0, weight=1)
+    report_frame.columnconfigure(0, weight=1)
+
+    report_text = ttk.Text(report_frame, wrap=tk.WORD)
+    report_scrollbar = ttk.Scrollbar(
+        report_frame,
+        orient=tk.VERTICAL,
+        command=report_text.yview,
+    )
+    report_text.configure(yscrollcommand=report_scrollbar.set)
+    report_text.grid(row=0, column=0, sticky='nsew')
+    report_scrollbar.grid(row=0, column=1, sticky='ns')
+    report_text.insert(tk.END, format_update_report(update_information))
+    report_text.configure(state=tk.DISABLED)
+
+    button_frame = ttk.Frame(dialog)
+    button_frame.pack(fill=tk.X, padx=16, pady=(0, 16))
+    ttk.Button(
+        button_frame,
+        text='Open comparison on GitHub',
+        command=lambda: webbrowser.open(update_information['compare_url']),
+        bootstyle='primary',
+    ).pack(side=tk.LEFT)
+    ttk.Button(
+        button_frame,
+        text='Close',
+        command=dialog.destroy,
+        bootstyle='secondary',
+    ).pack(side=tk.RIGHT)
+
+
+def check_for_updates(root, silent_if_current=False):
+    """Check GitHub in the background and report main-branch updates."""
+    if getattr(root, '_labber_update_check_running', False):
+        if not silent_if_current:
+            messagebox.showinfo(
+                'Update Check',
+                'An update check is already running.',
+                parent=root,
+            )
+        return
+
+    installed_commit = get_installed_commit()
+    if installed_commit is None:
+        if not silent_if_current:
+            messagebox.showwarning(
+                'Installed Version Unknown',
+                'The installed commit could not be determined. Run the current '
+                'setup script once to create version metadata.',
+                parent=root,
+            )
+        return
+
+    result_queue = queue.Queue(maxsize=1)
+    root._labber_update_check_running = True
+    if not silent_if_current:
+        root.configure(cursor='watch')
+
+    def update_worker():
+        try:
+            result_queue.put(('success', fetch_update_information(installed_commit)))
+        except Exception as error:
+            result_queue.put(('error', error))
+
+    def finish_update_check():
+        try:
+            result_type, result = result_queue.get_nowait()
+        except queue.Empty:
+            root.after(100, finish_update_check)
+            return
+
+        root._labber_update_check_running = False
+        if not silent_if_current:
+            root.configure(cursor='')
+
+        if result_type == 'error':
+            if not silent_if_current:
+                if isinstance(result, urllib.error.HTTPError) and result.code == 403:
+                    error_message = (
+                        'GitHub temporarily rejected the request. The public API '
+                        'rate limit may have been reached.'
+                    )
+                else:
+                    error_message = f'Could not check for updates:\n{result}'
+                messagebox.showerror('Update Check Failed', error_message, parent=root)
+            return
+
+        if result['ahead_by'] > 0:
+            show_update_dialog(root, result)
+        elif not silent_if_current:
+            if result['status'] == 'behind':
+                status_message = (
+                    'This installation contains a commit newer than or outside '
+                    'the current main branch.'
+                )
+            else:
+                status_message = 'You are using the newest version from the main branch.'
+            messagebox.showinfo('No Updates Available', status_message, parent=root)
+
+    threading.Thread(target=update_worker, daemon=True).start()
+    root.after(100, finish_update_check)
+
+
 def data_menu_bar(root, hdf5data):
     menubar = ttk.Menu(root)
     # Adding File Menu and commands
@@ -109,15 +427,47 @@ def data_menu_bar(root, hdf5data):
 
     add_style_menu(root, menubar)
 
+    help_menu = ttk.Menu(menubar, tearoff=0)
+    help_menu.add_command(
+        label='Check for Updates...',
+        command=lambda: check_for_updates(root),
+    )
+    menubar.add_cascade(label='Help', menu=help_menu)
+
     return menubar
 
 
-def get_path(hdf5Data):
-    pth = filedialog.askopenfilename(filetypes=[("HDF5 files", "*.hdf5")])
-    hdf5Data.set_path(pth, 'r')
+def set_hdf5_path(hdf5Data, path):
+    """Validate an HDF5 file and make it the viewer's current file."""
+    normalized_path = os.path.abspath(os.path.expanduser(path))
+    extension = os.path.splitext(normalized_path)[1].lower()
+
+    if extension not in HDF5_FILE_EXTENSIONS:
+        raise ValueError('Only .hdf5 and .h5 files can be opened.')
+    if not os.path.isfile(normalized_path):
+        raise ValueError(f'The dropped file does not exist:\n{normalized_path}')
+    if not h5py.is_hdf5(normalized_path):
+        raise ValueError(f'The selected file is not a valid HDF5 file:\n{normalized_path}')
+
+    hdf5Data.set_path(normalized_path, 'r')
     hdf5Data.set_filename()
     hdf5Data.vars = []
-    return pth
+    return normalized_path
+
+
+def get_path(hdf5Data):
+    """Select and validate an HDF5 file using the system file dialog."""
+    path = filedialog.askopenfilename(
+        filetypes=[('HDF5 files', ('*.hdf5', '*.h5'))]
+    )
+    if not path:
+        return None
+
+    try:
+        return set_hdf5_path(hdf5Data, path)
+    except (OSError, ValueError) as error:
+        messagebox.showerror('Invalid HDF5 File', str(error))
+        return None
 
 def get_unique_filename(filepath):
     #Returns a unique filename by appending a number if the file already exists
@@ -829,24 +1179,70 @@ def display_hdf5_file(root, hdf5Data):
 
     # Function to open an HDF5 file
     def open_hdf5_file():
-        hdf5Data.set_data()
-        if hdf5Data:
-            with hdf5Data.file as file:
-                # Function to display the content of a group recursively
-                def display_group(group, parent_tree_node):
-                    for name, item in group.items():
-                        if isinstance(item, h5py.Group):
-                            child_node = tree.insert(parent_tree_node, "end", text=name)
-                            display_group(item, child_node)
-                        elif isinstance(item, h5py.Dataset):
-                            dataset_node = tree.insert(parent_tree_node, "end", text=name, value=(item.shape,))
-                        else:
-                            tree.insert(parent_tree_node, "end", text=name)
+        if not hdf5Data.readpath:
+            messagebox.showinfo(
+                'No HDF5 File Selected',
+                'Select an HDF5 file or drop one onto the file tree first.',
+                parent=root,
+            )
+            return False
 
-                # Display the content of the root group
-                display_group(file, "")
+        def display_group(group, parent_tree_node):
+            for name, item in group.items():
+                if isinstance(item, h5py.Group):
+                    child_node = tree.insert(parent_tree_node, 'end', text=name)
+                    display_group(item, child_node)
+                elif isinstance(item, h5py.Dataset):
+                    tree.insert(
+                        parent_tree_node,
+                        'end',
+                        text=name,
+                        value=(item.shape,),
+                    )
+                else:
+                    tree.insert(parent_tree_node, 'end', text=name)
+
+        try:
+            with h5py.File(hdf5Data.readpath, 'r') as hdf5_file:
+                for item in tree.get_children():
+                    tree.delete(item)
+                display_group(hdf5_file, '')
+        except (OSError, ValueError) as error:
+            messagebox.showerror(
+                'Could Not Open HDF5 File',
+                str(error),
+                parent=root,
+            )
+            return False
+
+        root.title(f'HDF5 File Viewer — {hdf5Data.file_name}')
+        return True
+
+    def on_hdf5_drop(event):
+        """Open one HDF5 file dropped onto the file tree."""
+        dropped_paths = root.tk.splitlist(event.data)
+        if len(dropped_paths) != 1:
+            messagebox.showerror(
+                'Drop One HDF5 File',
+                'Please drop exactly one .hdf5 or .h5 file at a time.',
+                parent=root,
+            )
+            return REFUSE_DROP
+
+        try:
+            set_hdf5_path(hdf5Data, dropped_paths[0])
+        except (OSError, ValueError) as error:
+            messagebox.showerror(
+                'Invalid HDF5 File',
+                str(error),
+                parent=root,
+            )
+            return REFUSE_DROP
+
+        return COPY if open_hdf5_file() else REFUSE_DROP
 
     def close_tree_and_hdf5data(hdf5Data):
+        working_directory = hdf5Data.wdir
         for item in tree.get_children():
             tree.delete(item)
         for ploter in array_plotters:
@@ -862,7 +1258,8 @@ def display_hdf5_file(root, hdf5Data):
                 except Exception as e:
                     print(f'Failed to delete {file_path}. Reason: {e}')
         hdf5Data.reset()
-        hdf5Data = None
+        hdf5Data.wdir = working_directory
+        root.title('HDF5 File Viewer')
 
    
 
@@ -915,6 +1312,13 @@ def display_hdf5_file(root, hdf5Data):
     open_button.pack(side=tk.RIGHT, pady=10)
 
 
+    drop_label = ttk.Label(
+        root,
+        text='Drop one .hdf5 or .h5 file onto the tree to open it',
+        bootstyle='secondary',
+    )
+    drop_label.pack(padx=10, pady=(0, 5), anchor='w')
+
     # Create a treeview widget to display the HDF5 file structure
     tree = ttk.Treeview(root, columns=("Value"))
     tree.heading("#0", text="HDF5 File Structure", anchor="w")
@@ -927,6 +1331,18 @@ def display_hdf5_file(root, hdf5Data):
     tree.bind('<Button-2>', on_right_click)
     tree.bind('<Double-1>', on_double_click)
     tree.bind('<Double-2>', on_double_right_click)
+
+    try:
+        TkinterDnD.require(root)
+        tree.drop_target_register(DND_FILES)
+        tree.dnd_bind('<<Drop>>', on_hdf5_drop)
+    except (RuntimeError, tk.TclError) as error:
+        drop_label.configure(
+            text='Drag and drop is unavailable; use File → Select File Directory.',
+            bootstyle='warning',
+        )
+        print(f'Drag and drop could not be enabled: {error}')
+
     return tree
 
 
@@ -952,6 +1368,7 @@ def main():
     root.title('HDF5 File Viewer')
     root.protocol("WM_DELETE_WINDOW", on_close)
     tree = display_hdf5_file(root, hdf5Data)
+    root.after(2000, lambda: check_for_updates(root, silent_if_current=True))
     root.mainloop()
     # Run the Tkinter main loop
 
