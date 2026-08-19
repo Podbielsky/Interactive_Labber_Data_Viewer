@@ -10,9 +10,9 @@
 - do not add to deprecated classes 
 - if you add to the ``__init__`` method of a class, label what feature your code belongs to 
 - Place new code in the most appropriate file/module.
-    - ``interactive_plotting_tools.py`` for adding GUI elements  
-    - ``Data_analysis_and_transforms.py`` for generic mathematical or data analysis methods 
-    - ``HDF5Data.py`` for hdf5-file handling
+    - ``source/interactive_plotting_tools.py`` for adding GUI elements
+    - ``source/Data_analysis_and_transforms.py`` for generic mathematical or data analysis methods
+    - ``source/HDF5Data.py`` for hdf5-file handling
 - Avoid code duplication; reuse existing functions where possible.
 - ==Make clear what code belongs to you==
 - Do not change the code of another author unless necessary 
@@ -50,4 +50,4 @@
 ## Testing
 - Test new features with various data files and edge cases.
 - Ensure existing functionality is not broken after changes before pushing.
-- Print timing or debug information (e.g., plotting time) only when useful for development; remove or comment out before pushing unless necessary  
+- Print timing or debug information (e.g., plotting time) only when useful for development; remove or comment out before pushing unless necessary

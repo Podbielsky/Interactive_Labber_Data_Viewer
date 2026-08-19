@@ -9,8 +9,8 @@ Requirements |
 
 Installation
 ->
-1. Keep set_up_labber_hdf5_GUI.bat, labber_hdf5_viewer.bat, the icons
-   folder, and all supplied Python files together in the same folder.
+1. Keep set_up_labber_hdf5_GUI.bat, labber_hdf5_viewer.bat, and the
+   source and icons folders together in the same folder.
 
 2. Double-click set_up_labber_hdf5_GUI.bat. The setup script will:
    - Look for Python 3.10 in
@@ -53,8 +53,8 @@ Requirements |
 
 Installation
 ->
-1. Keep set_up_labber_hdf5_GUI.sh, the icons folder, and all supplied
-   Python files together in the same folder.
+1. Keep set_up_labber_hdf5_GUI.sh and the source and icons folders together
+   in the same folder.
 
 2. Open Terminal in that folder and run:
 

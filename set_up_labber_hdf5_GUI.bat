@@ -70,13 +70,13 @@ IF EXIST "%ENV_NAME%\Scripts\activate.bat" (
     echo Required packages installed successfully.
 
     REM Copy Python scripts to the Scripts directory of the virtual environment
-    copy "%~dp0interactive_hdf5_files.py" "%ENV_NAME%\Scripts"
-    copy "%~dp0creating_hdf5_files_from_npy_files.py" "%ENV_NAME%\Scripts"
-    copy "%~dp0HDF5Data.py" "%ENV_NAME%\Scripts"
-    copy "%~dp0interactive_plotting_tools.py" "%ENV_NAME%\Scripts"
-    copy "%~dp0Data_analysis_and_transforms.py" "%ENV_NAME%\Scripts"
-    copy "%~dp0custom_cmap.py" "%ENV_NAME%\Scripts"
-    copy "%~dp0gamma_map.py" "%ENV_NAME%\Scripts"
+    copy "%~dp0source\interactive_hdf5_files.py" "%ENV_NAME%\Scripts"
+    copy "%~dp0source\creating_hdf5_files_from_npy_files.py" "%ENV_NAME%\Scripts"
+    copy "%~dp0source\HDF5Data.py" "%ENV_NAME%\Scripts"
+    copy "%~dp0source\interactive_plotting_tools.py" "%ENV_NAME%\Scripts"
+    copy "%~dp0source\Data_analysis_and_transforms.py" "%ENV_NAME%\Scripts"
+    copy "%~dp0source\custom_cmap.py" "%ENV_NAME%\Scripts"
+    copy "%~dp0source\gamma_map.py" "%ENV_NAME%\Scripts"
     copy /Y "%~dp0labber_hdf5_viewer.bat" "%LABBER_SHORTCUT_TARGET%"
 
     IF ERRORLEVEL 1 (

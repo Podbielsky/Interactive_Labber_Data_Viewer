@@ -12,6 +12,7 @@ if [[ -z "${HOME:-}" ]]; then
 fi
 
 LABBER_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+LABBER_SOURCE_DIR="$LABBER_SCRIPT_DIR/source"
 LABBER_OS="$(uname -s)"
 
 case "$LABBER_OS" in
@@ -55,8 +56,8 @@ LABBER_ICON_FILES=(
 )
 
 for LABBER_REQUIRED_FILE in "${LABBER_APPLICATION_FILES[@]}"; do
-    if [[ ! -f "$LABBER_SCRIPT_DIR/$LABBER_REQUIRED_FILE" ]]; then
-        labber_fail "Required file is missing: $LABBER_REQUIRED_FILE"
+    if [[ ! -f "$LABBER_SOURCE_DIR/$LABBER_REQUIRED_FILE" ]]; then
+        labber_fail "Required file is missing: source/$LABBER_REQUIRED_FILE"
     fi
 done
 
@@ -149,7 +150,7 @@ printf 'Installing required packages...\n'
 printf 'Copying application files...\n'
 for LABBER_APPLICATION_FILE in "${LABBER_APPLICATION_FILES[@]}"; do
     install -m 0644 \
-        "$LABBER_SCRIPT_DIR/$LABBER_APPLICATION_FILE" \
+        "$LABBER_SOURCE_DIR/$LABBER_APPLICATION_FILE" \
         "$LABBER_APP_DIR/$LABBER_APPLICATION_FILE"
 done
 
