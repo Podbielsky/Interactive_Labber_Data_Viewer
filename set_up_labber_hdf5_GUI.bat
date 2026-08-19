@@ -60,7 +60,7 @@ IF EXIST "%ENV_NAME%\Scripts\activate.bat" (
 
     REM Install required packages
     echo Installing required packages...
-    "%ENV_NAME%\Scripts\python.exe" -m pip install numpy==1.22.4 scipy==1.7.3 matplotlib==3.5.0 numba==0.58.1 h5py tkinterdnd2
+    "%ENV_NAME%\Scripts\python.exe" -m pip install numpy==1.22.4 scipy==1.7.3 matplotlib==3.5.0 numba==0.58.1 h5py tkinterdnd2 ttkbootstrap==2.2.2
 
     IF ERRORLEVEL 1 (
         echo Failed to install one or more required packages.

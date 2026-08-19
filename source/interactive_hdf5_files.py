@@ -1,5 +1,6 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk, simpledialog
+from tkinter import filedialog, messagebox, simpledialog
+import ttkbootstrap as ttk
 import h5py
 import numpy as np
 import os
@@ -14,6 +15,7 @@ import traceback
 
 array_plotters = []
 list_name = ['Channels', 'Instrument config', 'Instruments', 'Log list', 'Settings', 'Step config', 'Step list', 'Tags', 'Views']
+DEFAULT_THEME = 'bootstrap-light'
 
 
 def set_application_icon(window):
@@ -36,10 +38,49 @@ def set_application_icon(window):
             return
 
 
+def change_application_style(root, theme_variable, theme_name):
+    """Apply a ttkbootstrap theme to the running application."""
+    try:
+        root.theme_use(theme_name)
+        theme_variable.set(theme_name)
+    except tk.TclError as error:
+        messagebox.showerror(
+            'Style Error',
+            f'Could not apply the {theme_name!r} style:\n{error}',
+            parent=root,
+        )
+
+
+def add_style_menu(root, menubar):
+    """Add runtime-selectable light and dark themes to the menu bar."""
+    style_menu = ttk.Menu(menubar, tearoff=0)
+    light_menu = ttk.Menu(style_menu, tearoff=0)
+    dark_menu = ttk.Menu(style_menu, tearoff=0)
+    theme_variable = tk.StringVar(master=root, value=root.theme_use())
+
+    for theme_name in sorted(root.theme_names()):
+        target_menu = dark_menu if theme_name.endswith('-dark') else light_menu
+        target_menu.add_radiobutton(
+            label=theme_name,
+            variable=theme_variable,
+            value=theme_name,
+            command=lambda selected_theme=theme_name: change_application_style(
+                root, theme_variable, selected_theme
+            ),
+        )
+
+    style_menu.add_cascade(label='Light', menu=light_menu)
+    style_menu.add_cascade(label='Dark', menu=dark_menu)
+    menubar.add_cascade(label='Style', menu=style_menu)
+
+    # Keep the Tk variable alive for as long as the application window exists.
+    root._labber_theme_variable = theme_variable
+
+
 def data_menu_bar(root, hdf5data):
-    menubar = tk.Menu(root)
+    menubar = ttk.Menu(root)
     # Adding File Menu and commands
-    file = tk.Menu(menubar, tearoff=0)
+    file = ttk.Menu(menubar, tearoff=0)
     menubar.add_cascade(label='File', menu=file)
     file.add_command(label='Select File Directory', command=lambda: get_path(hdf5data))
     file.add_command(label='Move File to', command=lambda: move_data(hdf5data))
@@ -50,7 +91,7 @@ def data_menu_bar(root, hdf5data):
     file.add_command(label='Add Traces from HDF5 File', command=lambda: add_traces_window(hdf5data)) # Nico Reinders: to add traces to current file from another HDF5 file
     file.add_command(label='Generate Traces from Dataset', command=lambda: transform_traces_window(hdf5data)) # Nico Reinders: create a file with a 'Traces' group that is compatible with the interactive data viewer 
     
-    data = tk.Menu(menubar, tearoff=0)
+    data = ttk.Menu(menubar, tearoff=0)
     menubar.add_cascade(label='Data', menu=data)
     data.add_command(label='Save Data as Numpy Array', command=lambda: create_data_array(hdf5data))
     data.add_command(label='Save Traces as Numpy Arrays', command=lambda: create_trace_array(hdf5data))
@@ -60,11 +101,13 @@ def data_menu_bar(root, hdf5data):
     
 
     data.add_separator()
-    plotting = tk.Menu(menubar, tearoff=0)
+    plotting = ttk.Menu(menubar, tearoff=0)
     menubar.add_cascade(label='Plotting', menu=plotting)
     plotting.add_command(label='Plot Map', command=lambda: plot_array(hdf5data, root))
     plotting.add_command(label='Plot Map with Trace Data', command=lambda: plot_array_with_trace_data(hdf5data, root))
     plotting.add_separator()
+
+    add_style_menu(root, menubar)
 
     return menubar
 
@@ -249,7 +292,7 @@ def transform_traces_window(hdf5Data):
 
     
             
-    transform_options = tk.Toplevel()
+    transform_options = ttk.Toplevel()
 
     def on_close_transform_options():
         try:
@@ -264,7 +307,7 @@ def transform_traces_window(hdf5Data):
 
     
     # Frame for dataset labels
-    label_frame = tk.Frame(transform_options)
+    label_frame = ttk.Frame(transform_options)
     label_frame.pack(anchor='w', pady=5, padx=5, fill='x')
 
     # Store the valid datasets and axis datasets in dictionaries
@@ -304,19 +347,19 @@ def transform_traces_window(hdf5Data):
         database_combo.grid(row=0, column=1, padx=10, pady=10, sticky='w')
         axis_combo.grid(row=1, column=1, padx=10, pady=10, sticky='w')
         
-        tk.Label(label_frame, textvariable=dataset_label_text).grid(row=0, column=2, padx=10, pady=5, sticky='w')    
-        tk.Label(label_frame, textvariable=axis_label_text).grid(row=1, column=2, padx=10, pady=5, sticky='w')    
+        ttk.Label(label_frame, textvariable=dataset_label_text).grid(row=0, column=2, padx=10, pady=5, sticky='w')
+        ttk.Label(label_frame, textvariable=axis_label_text).grid(row=1, column=2, padx=10, pady=5, sticky='w')
         
-        tk.Label(label_frame, text="Selected Dataset:").grid(row=0, column=0, padx=10, pady=5, sticky='e')
-        tk.Label(label_frame, text="Selected Axis Dataset:").grid(row=1, column=0, padx=10, pady=5, sticky='e')
+        ttk.Label(label_frame, text="Selected Dataset:").grid(row=0, column=0, padx=10, pady=5, sticky='e')
+        ttk.Label(label_frame, text="Selected Axis Dataset:").grid(row=1, column=0, padx=10, pady=5, sticky='e')
     else:
-        tk.Label(label_frame, text=f"Numpy file shape: {arr.shape}").pack(anchor='w')
+        ttk.Label(label_frame, text=f"Numpy file shape: {arr.shape}").pack(anchor='w')
     # Frame for spinbox + label
-    spin_frame = tk.Frame(transform_options)
+    spin_frame = ttk.Frame(transform_options)
     
     spin_frame.pack(anchor='w', pady=5, padx=5, fill='x')
 
-    tk.Label(spin_frame, text="Index of dimension in selected dataset to be used as x axis:").pack(side='left', padx=(0, 5))
+    ttk.Label(spin_frame, text="Index of dimension in selected dataset to be used as x axis:").pack(side='left', padx=(0, 5))
 
     def validate_int(new_value):
         # validate the spinbox input
@@ -333,30 +376,30 @@ def transform_traces_window(hdf5Data):
     dimension_index = tk.IntVar(value=0)  # Default to 0
     
     # add a spinbox to select the dimension that will be used as trace length
-    tk.Spinbox(spin_frame, from_=0, to=2, increment=1, width=5, textvariable=dimension_index,validate="key", validatecommand=vcmd).pack(side='left')
+    ttk.Spinbox(spin_frame, from_=0, to=2, increment=1, width=5, textvariable=dimension_index, validate="key", validatecommand=vcmd).pack(side='left')
 
     if ext == '.hdf5':
         on_var_change()  # Initial call to set labels
 
     # Buttons frame
-    button_frame = tk.Frame(transform_options)
+    button_frame = ttk.Frame(transform_options)
     button_frame.pack(pady=10)
 
     if ext == '.hdf5':
-        confirm_button = tk.Button(
+        confirm_button = ttk.Button(
             button_frame,
             text="Confirm Reshape",
             command=lambda: (apply_reshape(dataset_map[dataset_selection.get()], axis_map[axis_selection.get()], int(dimension_index.get())), transform_options.destroy())
         )
     else:
-        confirm_button = tk.Button(
+        confirm_button = ttk.Button(
             button_frame,
             text="Confirm Reshape",
             command=lambda: (apply_reshape(arr, axis_arr, int(dimension_index.get())), transform_options.destroy())
         )
     confirm_button.pack(side='left', padx=5)
 
-    cancel_button = tk.Button(button_frame, text="Cancel", command=transform_options.destroy)
+    cancel_button = ttk.Button(button_frame, text="Cancel", command=transform_options.destroy, bootstyle='secondary')
     cancel_button.pack(side='left', padx=5)
     
     
@@ -375,15 +418,15 @@ def add_traces_window(hdf5Data):
     traces_hdf5Data.set_path(pth, 'r')
     
     # open treeview window
-    traces_selection_window = tk.Toplevel()
+    traces_selection_window = ttk.Toplevel()
     traces_selection_window.title('Add Traces from HDF5 File')
         
     #add an entry for the group name in the destination file
-    group_frame = tk.Frame(traces_selection_window)
+    group_frame = ttk.Frame(traces_selection_window)
     group_frame.pack(pady=5)
-    tk.Label(group_frame, text="Destination group name:").pack(side=tk.LEFT)
+    ttk.Label(group_frame, text="Destination group name:").pack(side=tk.LEFT)
     group_name_var = tk.StringVar(value='Traces')
-    group_name_entry = tk.Entry(group_frame, textvariable=group_name_var, width=30)
+    group_name_entry = ttk.Entry(group_frame, textvariable=group_name_var, width=30)
     group_name_entry.pack(side=tk.LEFT, padx=5)
 
     # show treeview of the source file
@@ -463,7 +506,7 @@ def add_traces_window(hdf5Data):
             return
 
     # Add a button to trigger the copy
-    copy_button = tk.Button(traces_selection_window, text="Copy Selected Dataset(s)", command=copy_selected_dataset)
+    copy_button = ttk.Button(traces_selection_window, text="Copy Selected Dataset(s)", command=copy_selected_dataset)
     copy_button.pack(pady=10)
     
         
@@ -477,13 +520,13 @@ def remove_selected_options_window(root, hdf5Data):
         selected_groups = [var.get() for var in vars if var.get()]
 
         # Create action selection buttons
-        action_frame = tk.Frame(newWindow)
+        action_frame = ttk.Frame(newWindow)
         action_frame.pack(fill='x', pady=10)
 
-        tk.Label(action_frame, text="Apply to:").pack(side='left', padx=5)
+        ttk.Label(action_frame, text="Apply to:").pack(side='left', padx=5)
 
         # Process single file button
-        single_file_button = tk.Button(
+        single_file_button = ttk.Button(
             action_frame,
             text="Single File",
             command=lambda: process_single_file(selected_groups)
@@ -491,7 +534,7 @@ def remove_selected_options_window(root, hdf5Data):
         single_file_button.pack(side='left', padx=5)
 
         # Process folder button
-        folder_button = tk.Button(
+        folder_button = ttk.Button(
             action_frame,
             text="Folder of Files",
             command=lambda: process_folder(selected_groups)
@@ -605,7 +648,7 @@ def remove_selected_options_window(root, hdf5Data):
         status_var.set(f"Completed! Processed: {processed_files}, Errors: {error_files}")
 
         # Add close button
-        tk.Button(
+        ttk.Button(
             status_window['window'],
             text="Close",
             command=status_window['window'].destroy
@@ -613,7 +656,7 @@ def remove_selected_options_window(root, hdf5Data):
 
     def create_status_window(parent, show_progress=False):
         # Create a status window for showing processing progress
-        status_window = tk.Toplevel(parent)
+        status_window = ttk.Toplevel(parent)
         status_window.title("Processing Status")
         status_window.geometry("400x150")
 
@@ -622,7 +665,7 @@ def remove_selected_options_window(root, hdf5Data):
 
         # Status label
         status_var = tk.StringVar(value="Processing...")
-        status_label = tk.Label(status_window, textvariable=status_var, wraplength=380)
+        status_label = ttk.Label(status_window, textvariable=status_var, wraplength=380)
         status_label.pack(pady=10, fill='x')
 
         # Progress bar (optional)
@@ -648,27 +691,27 @@ def remove_selected_options_window(root, hdf5Data):
 
 
     # Create the selection window
-    newWindow = tk.Toplevel(root)
+    newWindow = ttk.Toplevel(root)
     newWindow.title("Select Datasets to Remove")
     newWindow.geometry("400x500")
 
     # Instructions label
-    tk.Label(
+    ttk.Label(
         newWindow,
         text="Select datasets to remove from HDF5 files:",
         wraplength=350
     ).pack(pady=10)
 
     # Create a frame with scrollbar for checkbuttons
-    scroll_frame = tk.Frame(newWindow)
+    scroll_frame = ttk.Frame(newWindow)
     scroll_frame.pack(fill='both', expand=True, padx=10, pady=5)
 
     # Create canvas and scrollbar
-    canvas = tk.Canvas(scroll_frame)
+    canvas = ttk.Canvas(scroll_frame)
     scrollbar = ttk.Scrollbar(scroll_frame, orient="vertical", command=canvas.yview)
 
     # Configure canvas
-    checkbutton_frame = tk.Frame(canvas)
+    checkbutton_frame = ttk.Frame(canvas)
     checkbutton_frame.bind(
         "<Configure>",
         lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
@@ -685,7 +728,7 @@ def remove_selected_options_window(root, hdf5Data):
     vars = []
     for string in list_name:
         var = tk.StringVar()
-        checkbutton = tk.Checkbutton(
+        checkbutton = ttk.Checkbutton(
             checkbutton_frame,
             text=string,
             variable=var,
@@ -696,7 +739,7 @@ def remove_selected_options_window(root, hdf5Data):
         vars.append(var)
 
     # Add confirm button at the bottom
-    confirm_button = tk.Button(
+    confirm_button = ttk.Button(
         newWindow,
         text="Confirm Selection",
         command=confirm_selection
@@ -747,12 +790,12 @@ def create_data_array(hdf5Data):
     np.save(pth + new_filename, hdf5Data.arrays, allow_pickle=True)
 
 def create_hdf5_files_from_npy(root):
-    new_window = tk.Toplevel(root)
+    new_window = ttk.Toplevel(root)
     new_window.title("Create HDF5 file")
     CreateHDF5File(new_window)
 
 def plot_array(hdf5Data, root):
-    new_window = tk.Toplevel(root)
+    new_window = ttk.Toplevel(root)
     new_window.title("Array Plotter")
     hdf5Data.set_data()
     hdf5Data.set_measure_dim()
@@ -762,7 +805,7 @@ def plot_array(hdf5Data, root):
 
 
 def plot_array_with_trace_data(hdf5Data, root):
-    new_window = tk.Toplevel(root)
+    new_window = ttk.Toplevel(root)
     new_window.title("Array Plotter")
     hdf5Data.set_data()
     hdf5Data.set_measure_dim()
@@ -865,10 +908,10 @@ def display_hdf5_file(root, hdf5Data):
     frame = ttk.Frame(root)
     frame.pack(side=tk.TOP, padx=5, pady=5)
     # Button to close the tree and reset hdf5Data
-    close_button = tk.Button(frame, text="Close HDF5 File", command=lambda: close_tree_and_hdf5data(hdf5Data))
+    close_button = ttk.Button(frame, text="Close HDF5 File", command=lambda: close_tree_and_hdf5data(hdf5Data), bootstyle='secondary')
     close_button.pack(side=tk.RIGHT, pady=10)
     # Button to open an HDF5 file
-    open_button = tk.Button(frame, text="Show HDF5 File", command=open_hdf5_file)
+    open_button = ttk.Button(frame, text="Show HDF5 File", command=open_hdf5_file, bootstyle='primary')
     open_button.pack(side=tk.RIGHT, pady=10)
 
 
@@ -900,9 +943,9 @@ def main():
     wdir = os.path.join(script_dir, 'wdir')
     if not os.path.exists(wdir):
         os.makedirs(wdir)
-    # Create the Tkinter root window
+    # Create the themed application root window.
     hdf5Data = HDF5Data(wdir=wdir)
-    root = tk.Tk()
+    root = ttk.App(theme=DEFAULT_THEME)
     set_application_icon(root)
     data_bar = data_menu_bar(root, hdf5Data)
     root.config(menu=data_bar)

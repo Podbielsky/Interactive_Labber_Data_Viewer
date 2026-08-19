@@ -87,3 +87,10 @@ Notes
 - Python is not added to the system PATH.
 - On Linux, the desktop environment may ask you to confirm "Allow Launching"
   the first time the shortcut is used.
+
+
+Changing the interface style
+-->
+- Open the Style menu next to File, Data, and Plotting.
+- Choose a theme from the Light or Dark submenu.
+- The selected theme is applied immediately to all open viewer windows.

@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import ttkbootstrap as ttk
 import numpy as np
 import h5py
 
@@ -27,25 +28,25 @@ class CreateHDF5File:
         self.update_visibility()
 
     def create_selection_area(self):
-        frame = tk.Frame(self.root)
+        frame = ttk.Frame(self.root)
         frame.pack(padx=10, pady=10, fill='x')
 
-        tk.Label(frame, text="Select Input Type:").pack(side='left', padx=5)
-        tk.Radiobutton(frame, text="Multiple Files", variable=self.selection_var, value="multiple",
-                       command=self.update_visibility).pack(side='left', padx=5)
-        tk.Radiobutton(frame, text="Single 3D File", variable=self.selection_var, value="single",
-                       command=self.update_visibility).pack(side='left', padx=5)
+        ttk.Label(frame, text="Select Input Type:").pack(side='left', padx=5)
+        ttk.Radiobutton(frame, text="Multiple Files", variable=self.selection_var, value="multiple",
+                        command=self.update_visibility).pack(side='left', padx=5)
+        ttk.Radiobutton(frame, text="Single 3D File", variable=self.selection_var, value="single",
+                        command=self.update_visibility).pack(side='left', padx=5)
 
     def create_multiple_area(self):
-        frame = tk.Frame(self.root)
+        frame = ttk.Frame(self.root)
 
         # Global dimensionality selection
-        dim_frame = tk.Frame(frame)
+        dim_frame = ttk.Frame(frame)
         dim_frame.pack(padx=10, pady=5, fill='x')
-        tk.Label(dim_frame, text="Global Dimension Type:").pack(side='left', padx=5)
-        tk.Radiobutton(dim_frame, text="None", variable=self.dim_type, value="None").pack(side='left')
-        tk.Radiobutton(dim_frame, text="1D (array)", variable=self.dim_type, value="1D").pack(side='left')
-        tk.Radiobutton(dim_frame, text="2D (grid)", variable=self.dim_type, value="2D").pack(side='left')
+        ttk.Label(dim_frame, text="Global Dimension Type:").pack(side='left', padx=5)
+        ttk.Radiobutton(dim_frame, text="None", variable=self.dim_type, value="None").pack(side='left')
+        ttk.Radiobutton(dim_frame, text="1D (array)", variable=self.dim_type, value="1D").pack(side='left')
+        ttk.Radiobutton(dim_frame, text="2D (grid)", variable=self.dim_type, value="2D").pack(side='left')
 
         # File selection areas
         self.create_area(frame, 'x')
@@ -54,47 +55,47 @@ class CreateHDF5File:
         return frame
 
     def create_single_area(self):
-        frame = tk.Frame(self.root)
+        frame = ttk.Frame(self.root)
 
-        file_frame = tk.Frame(frame)
+        file_frame = ttk.Frame(frame)
         file_frame.pack(padx=10, pady=10, fill='x')
 
-        button = tk.Button(file_frame, text="Select single .npy file [x, y, z]", command=self.browse_single_file)
+        button = ttk.Button(file_frame, text="Select single .npy file [x, y, z]", command=self.browse_single_file)
         button.pack(side='left')
 
-        text_box = tk.Entry(file_frame, width=50)
+        text_box = ttk.Entry(file_frame, width=50)
         text_box.pack(side='left', padx=5)
         self.text_boxes['single'] = text_box
 
         for name in ['x', 'y', 'z']:
-            field_frame = tk.Frame(frame)
+            field_frame = ttk.Frame(frame)
             field_frame.pack(padx=10, pady=5, fill='x')
 
-            tk.Label(field_frame, text=f"Data name for {name}:").pack(side='left', padx=5)
-            name_entry = tk.Entry(field_frame, width=20)
+            ttk.Label(field_frame, text=f"Data name for {name}:").pack(side='left', padx=5)
+            name_entry = ttk.Entry(field_frame, width=20)
             name_entry.pack(side='left', padx=5)
             name_entry.bind("<KeyRelease>", lambda event, n=name: self.update_data_name(event, n))
 
         return frame
 
     def create_area(self, parent, name):
-        frame = tk.Frame(parent)
+        frame = ttk.Frame(parent)
         frame.pack(padx=10, pady=10, fill='x')
 
-        button = tk.Button(frame, text=f"Select .npy file for {name}", command=lambda: self.browse_files(name))
+        button = ttk.Button(frame, text=f"Select .npy file for {name}", command=lambda: self.browse_files(name))
         button.pack(side='left')
 
-        text_box = tk.Entry(frame, width=50)
+        text_box = ttk.Entry(frame, width=50)
         text_box.pack(side='left', padx=5)
         self.text_boxes[name] = text_box
 
-        tk.Label(frame, text="Data name:").pack(side='left', padx=5)
-        name_entry = tk.Entry(frame, width=20)
+        ttk.Label(frame, text="Data name:").pack(side='left', padx=5)
+        name_entry = ttk.Entry(frame, width=20)
         name_entry.pack(side='left', padx=5)
         name_entry.bind("<KeyRelease>", lambda event, n=name: self.update_data_name(event, n))
 
     def create_save_button(self):
-        button = tk.Button(self.root, text="Save HDF5 File", command=self.save_hdf5_file)
+        button = ttk.Button(self.root, text="Save HDF5 File", command=self.save_hdf5_file, bootstyle='success')
         button.pack(pady=20)
 
     def browse_files(self, name):
@@ -219,7 +220,6 @@ class CreateHDF5File:
             self.single_frame.pack(padx=10, pady=10, fill='x')
 
 if __name__ == "__main__":
-    root = tk.Tk()
+    root = ttk.App(theme='bootstrap-light')
     app = CreateHDF5File(root)
     root.mainloop()
-

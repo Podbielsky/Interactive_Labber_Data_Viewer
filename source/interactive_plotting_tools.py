@@ -3,8 +3,9 @@ import os
 import threading
 import queue
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox
 from tkinter import filedialog
+import ttkbootstrap as ttk
 import numpy as np
 import matplotlib
 matplotlib.use('TkAgg')
@@ -113,7 +114,7 @@ class InteractiveHistogramPlotter:
         self.canvas_widget = self.canvas.get_tk_widget()
         self.canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-        self.row_label = tk.Label(self.root, text="Selected Row:")
+        self.row_label = ttk.Label(self.root, text="Selected Row:")
         self.row_label.pack()
 
         # Combobox for row selection
@@ -123,7 +124,7 @@ class InteractiveHistogramPlotter:
         self.row_combobox.bind("<<ComboboxSelected>>", self.update_plot)
         self.row_combobox.pack()
 
-        self.col_label = tk.Label(self.root, text="Selected Column:")
+        self.col_label = ttk.Label(self.root, text="Selected Column:")
         self.col_label.pack()
 
         # Combobox for column selection
@@ -208,11 +209,11 @@ class InteractiveArrayPlotter:
 
 
         # Create Menu Bar
-        self.menubar = tk.Menu(self.root)
+        self.menubar = ttk.Menu(self.root)
         self.root.config(menu=self.menubar)
 
         # Create File Menu
-        self.file_menu = tk.Menu(self.menubar, tearoff=0)
+        self.file_menu = ttk.Menu(self.menubar, tearoff=0)
         self.file_menu.add_command(label="Save whole data as NumPy array", command=self.save_file)
         self.file_menu.add_command(label="Save displayed data as NumPy array", command=self.save_data)
         self.file_menu.add_separator()
@@ -220,7 +221,7 @@ class InteractiveArrayPlotter:
         self.menubar.add_cascade(label="File", menu=self.file_menu)
 
         # Create Data Display Menu
-        self.data_menu = tk.Menu(self.menubar, tearoff=0)
+        self.data_menu = ttk.Menu(self.menubar, tearoff=0)
         self.data_menu.add_command(label="Interpolation Settings", command=self.open_interpolation_window)
         self.data_menu.add_command(label="Gaussian Filter", command=self.open_gaussian_filter_window)
         self.data_menu.add_command(label="Cut Data to ROI", command=self.open_roi_data_cut_window)
@@ -229,7 +230,7 @@ class InteractiveArrayPlotter:
         self.menubar.add_cascade(label="Displayed Data", menu=self.data_menu)
 
         # Create Tool Menu
-        self.tool_menu = tk.Menu(self.menubar, tearoff=0)
+        self.tool_menu = ttk.Menu(self.menubar, tearoff=0)
         self.tool_menu.add_command(label="Derivative along Axis", command=self.open_derivative_window)
         self.tool_menu.add_command(label="Savitzky-Golay Filter", command=self.open_savitzky_golay_filter_window)
         self.tool_menu.add_command(label="Norm of Gradient", command=self.apply_sum_of_gradient)
@@ -242,7 +243,7 @@ class InteractiveArrayPlotter:
         self.tool_menu.add_command(label="2-D FFT Filter", command=self.open_2d_fft_filter)
 
         # Create Help Menu
-        self.help_menu = tk.Menu(self.menubar, tearoff=0)
+        self.help_menu = ttk.Menu(self.menubar, tearoff=0)
         self.help_menu.add_command(label="About", command=self.show_about)
         self.menubar.add_cascade(label="Help", menu=self.help_menu)
 
@@ -277,11 +278,11 @@ class InteractiveArrayPlotter:
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.root)
         self.toolbar = NavigationToolbar2Tk(self.canvas, root, pack_toolbar=False)
         self.toolbar.update()
-        self.crosshair_button = tk.Button(self.toolbar, text='Crosshair', command=self.toggle_crosshair)
+        self.crosshair_button = ttk.Button(self.toolbar, text='Crosshair', command=self.toggle_crosshair, bootstyle='info outline')
         self.crosshair_button.pack(side=tk.LEFT)
-        self.interpol_button = tk.Button(self.toolbar, text='Interpolation', command=self.toggle_interpolation)
+        self.interpol_button = ttk.Button(self.toolbar, text='Interpolation', command=self.toggle_interpolation, bootstyle='info outline')
         self.interpol_button.pack(side=tk.LEFT)
-        self.roi_button = tk.Button(self.toolbar, text='ROI', command=self.toggle_roi)
+        self.roi_button = ttk.Button(self.toolbar, text='ROI', command=self.toggle_roi, bootstyle='info outline')
         self.roi_button.pack(side=tk.LEFT)
         self.horiz_line = None
         self.vert_line = None
@@ -348,10 +349,10 @@ class InteractiveArrayPlotter:
         self.data_combobox.set(self.name_data[0])  # Set the default colormap
 
         # Create a Frame for the "Plot" buttons
-        self.button_frame = tk.Frame(self.root)
+        self.button_frame = ttk.Frame(self.root)
         self.frame2.pack(side=tk.RIGHT, padx=5, pady=5)
 
-        self.auto_scale_check = tk.Checkbutton(
+        self.auto_scale_check = ttk.Checkbutton(
             self.frame2,
             text="Auto-scale plot bounds",
             variable=self.auto_scale_var
@@ -777,46 +778,46 @@ class InteractiveArrayPlotter:
 
     def open_interpolation_window(self):
         # Create a new pop-up window for interpolation settings
-        self.interpolation_window = tk.Toplevel(self.root)
+        self.interpolation_window = ttk.Toplevel(self.root)
         self.interpolation_window.title("Interpolation Settings")
         self.interpolation_window.geometry("400x200")
 
         # Add a label and entry widget for the first interpolation value
-        tk.Label(self.interpolation_window, text="Enter Interpolation Factor for x-Axis (0.1 - 1.0):").pack()
-        self.interpolation_entry_1 = tk.Entry(self.interpolation_window)
+        ttk.Label(self.interpolation_window, text="Enter Interpolation Factor for x-Axis (0.1 - 1.0):").pack()
+        self.interpolation_entry_1 = ttk.Entry(self.interpolation_window)
         self.interpolation_entry_1.pack()
         self.interpolation_entry_1.insert(0, "1.0")  # Default value
 
         # Add a label and entry widget for the second interpolation value
-        tk.Label(self.interpolation_window, text="Enter Interpolation Factor for y-Axis (0.1 - 1.0):").pack()
-        self.interpolation_entry_2 = tk.Entry(self.interpolation_window)
+        ttk.Label(self.interpolation_window, text="Enter Interpolation Factor for y-Axis (0.1 - 1.0):").pack()
+        self.interpolation_entry_2 = ttk.Entry(self.interpolation_window)
         self.interpolation_entry_2.pack()
         self.interpolation_entry_2.insert(0, "1.0")  # Default value
-        submit_button = tk.Button(self.interpolation_window, text="Apply", command=self.apply_interpolation)
+        submit_button = ttk.Button(self.interpolation_window, text="Apply", command=self.apply_interpolation, bootstyle='primary')
         submit_button.pack()
 
     def open_gaussian_filter_window(self):
         # Create a new pop-up window for interpolation settings
-        self.gaussian_filter_window = tk.Toplevel(self.root)
+        self.gaussian_filter_window = ttk.Toplevel(self.root)
         self.gaussian_filter_window.title("Gaussian Filter Settings")
         self.gaussian_filter_window.geometry("400x200")
 
         # Add a label and entry widget for the first interpolation value
-        tk.Label(self.gaussian_filter_window, text="Pixel for x-Axis:").pack()
-        self.filter_pixel_x = tk.Entry(self.gaussian_filter_window)
+        ttk.Label(self.gaussian_filter_window, text="Pixel for x-Axis:").pack()
+        self.filter_pixel_x = ttk.Entry(self.gaussian_filter_window)
         self.filter_pixel_x.pack()
         self.filter_pixel_x.insert(0, "1.0")  # Default value
 
         # Add a label and entry widget for the second interpolation value
-        tk.Label(self.gaussian_filter_window, text="Pixel for y-Axis:").pack()
-        self.filter_pixel_y = tk.Entry(self.gaussian_filter_window)
+        ttk.Label(self.gaussian_filter_window, text="Pixel for y-Axis:").pack()
+        self.filter_pixel_y = ttk.Entry(self.gaussian_filter_window)
         self.filter_pixel_y.pack()
         self.filter_pixel_y.insert(0, "1.0")  # Default value
-        submit_button = tk.Button(self.gaussian_filter_window, text="Apply", command=self.apply_gaussian_filter)
+        submit_button = ttk.Button(self.gaussian_filter_window, text="Apply", command=self.apply_gaussian_filter, bootstyle='primary')
         submit_button.pack()
 
     def open_background_subtraction_window(self):
-        self.background_subtraction_window = tk.Toplevel(self.root)
+        self.background_subtraction_window = ttk.Toplevel(self.root)
         self.background_subtraction_window.title("Background Subtraction")
         self.background_subtraction_window.geometry("400x250")
 
@@ -826,58 +827,58 @@ class InteractiveArrayPlotter:
         self.background_subtraction_combobox.bind('<<ComboboxSelected>>', self.update_bg_subtraction_inputs)
 
         # Frame to contain method-specific input fields
-        self.method_input_frame = tk.Frame(self.background_subtraction_window)
+        self.method_input_frame = ttk.Frame(self.background_subtraction_window)
         self.method_input_frame.pack(fill=tk.BOTH, expand=True)
 
-        submit_button = tk.Button(self.background_subtraction_window, text="Apply", command=self.apply_background_subtraction)
+        submit_button = ttk.Button(self.background_subtraction_window, text="Apply", command=self.apply_background_subtraction, bootstyle='primary')
         submit_button.pack(side=tk.BOTTOM)
 
         # Initially update inputs for the default selected method
         self.update_bg_subtraction_inputs()
 
     def open_roi_data_cut_window(self):
-        self.roi_data_cut_window = tk.Toplevel(self.root)
+        self.roi_data_cut_window = ttk.Toplevel(self.root)
         self.roi_data_cut_window.title("ROI Data")
         self.roi_data_cut_window.geometry("300x250")
         self.roi_cut_entry_list = []
         labels = ["min. X:", "min.  Y:", "max. X:", "max. Y:"]
         coordinates = np.array([self.roi_corners[0][0], self.roi_corners[0][1], self.roi_corners[1][0], self.roi_corners[1][1]])
         for i, label in enumerate(labels):
-            tk.Label(self.roi_data_cut_window, text=label).grid(row=i, column=0, padx=5, pady=5)
-            entry = tk.Entry(self.roi_data_cut_window)
+            ttk.Label(self.roi_data_cut_window, text=label).grid(row=i, column=0, padx=5, pady=5)
+            entry = ttk.Entry(self.roi_data_cut_window)
             entry.insert(0, str(coordinates[i]))
             entry.grid(row=i, column=1, padx=5, pady=5)
             self.roi_cut_entry_list.append(entry)
-        submit_button = tk.Button(self.roi_data_cut_window, text="Apply", command=self.apply_roi_data_cut)
+        submit_button = ttk.Button(self.roi_data_cut_window, text="Apply", command=self.apply_roi_data_cut, bootstyle='primary')
         submit_button.grid(row=4, column=0, columnspan=2, padx=5, pady=5)
 
     def open_draw_lines_window(self):
-        self.draw_lines_window = tk.Toplevel(self.root)
+        self.draw_lines_window = ttk.Toplevel(self.root)
         self.draw_lines_window.title("Draw Lines")
         self.draw_lines_window.geometry("400x200")
         # Frames
 
-        self.draw_lines_button_frame = tk.Frame(self.draw_lines_window)
+        self.draw_lines_button_frame = ttk.Frame(self.draw_lines_window)
         self.draw_lines_button_frame.pack(side=tk.BOTTOM)
 
-        self.lines_list_frame = tk.Frame(self.draw_lines_window)
+        self.lines_list_frame = ttk.Frame(self.draw_lines_window)
         self.lines_list_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         # Scrollbar
-        self.lines_list_scrollbar = tk.Scrollbar(self.lines_list_frame)
+        self.lines_list_scrollbar = ttk.Scrollbar(self.lines_list_frame)
         self.lines_list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         # Listbox for displaying lines
-        self.lines_listbox = tk.Listbox(self.lines_list_frame, yscrollcommand=self.lines_list_scrollbar.set)
+        self.lines_listbox = ttk.Listbox(self.lines_list_frame, yscrollcommand=self.lines_list_scrollbar.set)
         self.lines_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.lines_list_scrollbar.config(command=self.lines_listbox.yview)
 
         # Buttons
-        activate_button = tk.Button(self.draw_lines_button_frame, text='Activate',
+        activate_button = ttk.Button(self.draw_lines_button_frame, text='Activate',
                                     command=self.activate_line_drawing)
-        deactivate_button = tk.Button(self.draw_lines_button_frame, text='Deactivate',
+        deactivate_button = ttk.Button(self.draw_lines_button_frame, text='Deactivate',
                                       command=self.deactivate_line_drawing)
-        reset_lines_button = tk.Button(self.draw_lines_button_frame, text='Reset',
+        reset_lines_button = ttk.Button(self.draw_lines_button_frame, text='Reset',
                                        command=self.reset_lines)
         activate_button.pack(side=tk.LEFT)
         deactivate_button.pack(side=tk.LEFT)
@@ -895,17 +896,17 @@ class InteractiveArrayPlotter:
         if selected_method == 'Polynomial':
 
             self.use_roi_in_bg_subtraction = tk.BooleanVar(value=False)
-            tk.Label(self.method_input_frame, text="X Polynomial Order:").pack()
-            self.poly_order_x = tk.Entry(self.method_input_frame)
+            ttk.Label(self.method_input_frame, text="X Polynomial Order:").pack()
+            self.poly_order_x = ttk.Entry(self.method_input_frame)
             self.poly_order_x.pack()
             self.poly_order_x.insert(0, "1")  # Default value
 
-            tk.Label(self.method_input_frame, text="Y Polynomial Order:").pack()
-            self.poly_order_y = tk.Entry(self.method_input_frame)
+            ttk.Label(self.method_input_frame, text="Y Polynomial Order:").pack()
+            self.poly_order_y = ttk.Entry(self.method_input_frame)
             self.poly_order_y.pack()
             self.poly_order_y.insert(0, "1")  # Default value
 
-            self.use_roi_in_bg_check = tk.Checkbutton(
+            self.use_roi_in_bg_check = ttk.Checkbutton(
                 self.method_input_frame,
                 text="Use ROI",
                 variable=self.use_roi_in_bg_subtraction
@@ -916,49 +917,49 @@ class InteractiveArrayPlotter:
             # Add input fields for the Relation Parameters method
             labels = ["Coefficient before X:", "Power of X:", "Coefficient before Y:", "Power of Y:", "Constant term:"]
             for i, label in enumerate(labels):
-                tk.Label(self.method_input_frame, text=label).grid(row=i, column=0)
-                entry = tk.Entry(self.method_input_frame, width=10)
+                ttk.Label(self.method_input_frame, text=label).grid(row=i, column=0)
+                entry = ttk.Entry(self.method_input_frame, width=10)
                 entry.insert(0, "0")
                 entry.grid(row=i, column=1)
                 self.relation_parameter_entry_list.append(entry)
 
         elif selected_method == 'Subtract Trace Average':
             # Add input fields for the `subtract_trace_average` function
-            tk.Label(self.method_input_frame, text="Number of Traces (n):").pack()
-            self.n_traces_entry = tk.Entry(self.method_input_frame)
+            ttk.Label(self.method_input_frame, text="Number of Traces (n):").pack()
+            self.n_traces_entry = ttk.Entry(self.method_input_frame)
             self.n_traces_entry.pack()
             self.n_traces_entry.insert(0, "1")  # Default value
 
-            tk.Label(self.method_input_frame, text="Axis (0 for rows, 1 for columns):").pack()
-            self.axis_entry = tk.Entry(self.method_input_frame)
+            ttk.Label(self.method_input_frame, text="Axis (0 for rows, 1 for columns):").pack()
+            self.axis_entry = ttk.Entry(self.method_input_frame)
             self.axis_entry.pack()
             self.axis_entry.insert(0, "0")  # Default value
 
-            tk.Label(self.method_input_frame, text="From End (True/False):").pack()
+            ttk.Label(self.method_input_frame, text="From End (True/False):").pack()
             self.from_end_var = tk.StringVar(value="False")
-            self.from_end_checkbox = tk.Checkbutton(self.method_input_frame, text="From End",
-                                                    variable=self.from_end_var, onvalue="True", offvalue="False")
+            self.from_end_checkbox = ttk.Checkbutton(self.method_input_frame, text="From End",
+                                                     variable=self.from_end_var, onvalue="True", offvalue="False")
             self.from_end_checkbox.pack()
 
-            tk.Label(self.method_input_frame, text="Use Gaussian Filter (True/False):").pack()
+            ttk.Label(self.method_input_frame, text="Use Gaussian Filter (True/False):").pack()
             self.use_filter_var = tk.StringVar(value="False")
-            self.use_filter_checkbox = tk.Checkbutton(self.method_input_frame, text="Use Filter",
-                                                      variable=self.use_filter_var, onvalue="True", offvalue="False")
+            self.use_filter_checkbox = ttk.Checkbutton(self.method_input_frame, text="Use Filter",
+                                                       variable=self.use_filter_var, onvalue="True", offvalue="False")
             self.use_filter_checkbox.pack()
 
-            tk.Label(self.method_input_frame, text="Polynomial Fit (True/False):").pack()
+            ttk.Label(self.method_input_frame, text="Polynomial Fit (True/False):").pack()
             self.poly_fit_var = tk.StringVar(value="False")
-            self.poly_fit_checkbox = tk.Checkbutton(self.method_input_frame, text="Polynomial Fit",
-                                                    variable=self.poly_fit_var, onvalue="True", offvalue="False")
+            self.poly_fit_checkbox = ttk.Checkbutton(self.method_input_frame, text="Polynomial Fit",
+                                                     variable=self.poly_fit_var, onvalue="True", offvalue="False")
             self.poly_fit_checkbox.pack()
 
-            tk.Label(self.method_input_frame, text="Filter Sigma:").pack()
-            self.filter_sigma_entry = tk.Entry(self.method_input_frame)
+            ttk.Label(self.method_input_frame, text="Filter Sigma:").pack()
+            self.filter_sigma_entry = ttk.Entry(self.method_input_frame)
             self.filter_sigma_entry.pack()
             self.filter_sigma_entry.insert(0, "1.0")  # Default value
 
-            tk.Label(self.method_input_frame, text="Polynomial Fit Order:").pack()
-            self.poly_fit_order_entry = tk.Entry(self.method_input_frame)
+            ttk.Label(self.method_input_frame, text="Polynomial Fit Order:").pack()
+            self.poly_fit_order_entry = ttk.Entry(self.method_input_frame)
             self.poly_fit_order_entry.pack()
             self.poly_fit_order_entry.insert(0, "1")  # Default value
 
@@ -989,24 +990,24 @@ class InteractiveArrayPlotter:
 
     def open_derivative_window(self):
 
-        self.derivative_window = tk.Toplevel(self.root)
+        self.derivative_window = ttk.Toplevel(self.root)
         self.derivative_window.title("Calculate derivative along axis")
         self.derivative_window.geometry("400x200")
         self.axis_selection = ['y', 'x']
         self.derivative_combobox = ttk.Combobox(self.derivative_window, values=self.axis_selection, state='readonly', width=10)
         self.derivative_combobox.pack(side=tk.BOTTOM, padx=5, pady=0)
         self.derivative_combobox.set('x')
-        submit_button = tk.Button(self.derivative_window, text="Apply", command=self.apply_derivative)
+        submit_button = ttk.Button(self.derivative_window, text="Apply", command=self.apply_derivative, bootstyle='primary')
         submit_button.pack()
 
     def open_savitzky_golay_filter_window(self):
-        self.savitzky_golay_filter_window = tk.Toplevel(self.root)
+        self.savitzky_golay_filter_window = ttk.Toplevel(self.root)
         self.savitzky_golay_filter_window.title("Savitzky-Golay Filter")
         self.savitzky_golay_filter_window.geometry("400x220")
 
         self.savgol_axis_selection = ['y', 'x']
 
-        tk.Label(self.savitzky_golay_filter_window, text="Axis:").pack()
+        ttk.Label(self.savitzky_golay_filter_window, text="Axis:").pack()
         self.savgol_axis_combobox = ttk.Combobox(
             self.savitzky_golay_filter_window,
             values=self.savgol_axis_selection,
@@ -1016,22 +1017,22 @@ class InteractiveArrayPlotter:
         self.savgol_axis_combobox.pack()
         self.savgol_axis_combobox.set('x')
 
-        tk.Label(self.savitzky_golay_filter_window, text="Window length:").pack()
-        self.savgol_window_entry = tk.Entry(self.savitzky_golay_filter_window)
+        ttk.Label(self.savitzky_golay_filter_window, text="Window length:").pack()
+        self.savgol_window_entry = ttk.Entry(self.savitzky_golay_filter_window)
         self.savgol_window_entry.pack()
         self.savgol_window_entry.insert(0, "7")
 
-        tk.Label(self.savitzky_golay_filter_window, text="Polynomial order:").pack()
-        self.savgol_poly_entry = tk.Entry(self.savitzky_golay_filter_window)
+        ttk.Label(self.savitzky_golay_filter_window, text="Polynomial order:").pack()
+        self.savgol_poly_entry = ttk.Entry(self.savitzky_golay_filter_window)
         self.savgol_poly_entry.pack()
         self.savgol_poly_entry.insert(0, "2")
 
-        tk.Label(self.savitzky_golay_filter_window, text="Derivative order:").pack()
-        self.savgol_deriv_entry = tk.Entry(self.savitzky_golay_filter_window)
+        ttk.Label(self.savitzky_golay_filter_window, text="Derivative order:").pack()
+        self.savgol_deriv_entry = ttk.Entry(self.savitzky_golay_filter_window)
         self.savgol_deriv_entry.pack()
         self.savgol_deriv_entry.insert(0, "0")
 
-        submit_button = tk.Button(
+        submit_button = ttk.Button(
             self.savitzky_golay_filter_window,
             text="Apply",
             command=self.apply_savitzky_golay_filter
@@ -1076,7 +1077,7 @@ class InteractiveArrayPlotter:
         self.update_pcolormesh(self.vmin, self.vmax)
 
     def open_data_axis_transform(self):
-        self.data_axis_transform_window = tk.Toplevel(self.root)
+        self.data_axis_transform_window = ttk.Toplevel(self.root)
         self.use_trace_wise_min_max_scaling_var = tk.BooleanVar(value=False)
         self.data_axis_transform_window.title("Axis Scaling and Renaming")
         self.data_axis_transform_window.geometry("400x240")
@@ -1084,43 +1085,43 @@ class InteractiveArrayPlotter:
         self.data_axis_transform_naming_frame = ttk.Frame(self.data_axis_transform_window)
         self.data_axis_transform_scaling_frame = ttk.Frame(self.data_axis_transform_window)
 
-        tk.Label(self.data_axis_transform_naming_frame, text="Axis Names:").pack()
-        tk.Label(self.data_axis_transform_scaling_frame, text="Axis Scaling Factors:").pack()
+        ttk.Label(self.data_axis_transform_naming_frame, text="Axis Names:").pack()
+        ttk.Label(self.data_axis_transform_scaling_frame, text="Axis Scaling Factors:").pack()
 
-        self.x_axis_name_input = tk.Entry(self.data_axis_transform_naming_frame)
+        self.x_axis_name_input = ttk.Entry(self.data_axis_transform_naming_frame)
         self.x_axis_name_input.pack()
         self.x_axis_name_input.insert(0, self.name_data_x_axis)
-        self.x_axis_scale_input = tk.Entry(self.data_axis_transform_scaling_frame)
+        self.x_axis_scale_input = ttk.Entry(self.data_axis_transform_scaling_frame)
         self.x_axis_scale_input.pack()
         self.x_axis_scale_input.insert(0, '1.0')
 
-        self.y_axis_name_input = tk.Entry(self.data_axis_transform_naming_frame)
+        self.y_axis_name_input = ttk.Entry(self.data_axis_transform_naming_frame)
         self.y_axis_name_input.pack()
         self.y_axis_name_input.insert(0, self.name_data_y_axis)
-        self.y_axis_scale_input = tk.Entry(self.data_axis_transform_scaling_frame)
+        self.y_axis_scale_input = ttk.Entry(self.data_axis_transform_scaling_frame)
         self.y_axis_scale_input.pack()
         self.y_axis_scale_input.insert(0, '1.0')
 
-        self.z_axis_name_input = tk.Entry(self.data_axis_transform_naming_frame)
+        self.z_axis_name_input = ttk.Entry(self.data_axis_transform_naming_frame)
         self.z_axis_name_input.pack()
         self.z_axis_name_input.insert(0, self.name_data_z)
-        self.z_axis_scale_input = tk.Entry(self.data_axis_transform_scaling_frame)
+        self.z_axis_scale_input = ttk.Entry(self.data_axis_transform_scaling_frame)
         self.z_axis_scale_input.pack()
         self.z_axis_scale_input.insert(0, '1.0')
 
-        tk.Label(self.data_axis_transform_scaling_frame, text="Auto Scale Factor:").pack()
-        self.auto_scale_factor_input = tk.Entry(self.data_axis_transform_scaling_frame)
+        ttk.Label(self.data_axis_transform_scaling_frame, text="Auto Scale Factor:").pack()
+        self.auto_scale_factor_input = ttk.Entry(self.data_axis_transform_scaling_frame)
         self.auto_scale_factor_input.pack()
         self.auto_scale_factor_input.insert(0, str(self.auto_scale_factor))
 
-        self.use_trace_wise_min_max_scaling_check = tk.Checkbutton(
+        self.use_trace_wise_min_max_scaling_check = ttk.Checkbutton(
             self.data_axis_transform_window,
             text="Trace Wise min-max scaling",
             variable=self.use_trace_wise_min_max_scaling_var
         )
         self.use_trace_wise_min_max_scaling_check.pack(side=tk.BOTTOM, pady=2)
 
-        submit_button = tk.Button(self.data_axis_transform_window, text="Apply", command=self.apply_data_axis_transform)
+        submit_button = ttk.Button(self.data_axis_transform_window, text="Apply", command=self.apply_data_axis_transform, bootstyle='primary')
         submit_button.pack(side=tk.BOTTOM)
         self.data_axis_transform_naming_frame.pack(side=tk.LEFT)
         self.data_axis_transform_scaling_frame.pack(side=tk.RIGHT)
@@ -1148,7 +1149,7 @@ class InteractiveArrayPlotter:
         # Opens the FFT trace correction window.
 
         # Create a new Toplevel window
-        self.fft_plot_window = tk.Toplevel(self.root)
+        self.fft_plot_window = ttk.Toplevel(self.root)
         self.fft_plot_window.title("FFT Correction")
 
         # Create a Matplotlib figure and axis
@@ -1185,10 +1186,10 @@ class InteractiveArrayPlotter:
         # Opens the 2D FFT filter tool window.
 
         # Create a new Toplevel window
-        self.fft_filter_window = tk.Toplevel(self.root)
+        self.fft_filter_window = ttk.Toplevel(self.root)
         self.fft_filter_window.title("2-D FFT Filter")
 
-        left_frame = tk.Frame(self.fft_filter_window)
+        left_frame = ttk.Frame(self.fft_filter_window)
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=1)
 
         # Create a Matplotlib figure and axis for the FFT filter
@@ -1202,34 +1203,34 @@ class InteractiveArrayPlotter:
         self.fft_filter_toolbar.update()
         self.fft_filter_toolbar.pack(side=tk.BOTTOM, fill=tk.X)
 
-        right_frame = tk.Frame(self.fft_filter_window)
+        right_frame = ttk.Frame(self.fft_filter_window)
         right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
 
         # Create radio buttons for selecting the preview mode
-        radio_frame = tk.Frame(right_frame)
+        radio_frame = ttk.Frame(right_frame)
         radio_frame.pack(side=tk.TOP, fill=tk.X, pady=25)
         self.fft_filter_mode = tk.StringVar(value='Mask Editor')
-        tk.Radiobutton(radio_frame, text='Mask Editor', variable=self.fft_filter_mode, value='Mask Editor', command=self.update_fft_filter_plot).pack(anchor=tk.W)
-        tk.Radiobutton(radio_frame, text='Filtered Data Preview', variable=self.fft_filter_mode, value='Filtered Data Preview', command=self.update_fft_filter_plot).pack(anchor=tk.W)
+        ttk.Radiobutton(radio_frame, text='Mask Editor', variable=self.fft_filter_mode, value='Mask Editor', command=self.update_fft_filter_plot).pack(anchor=tk.W)
+        ttk.Radiobutton(radio_frame, text='Filtered Data Preview', variable=self.fft_filter_mode, value='Filtered Data Preview', command=self.update_fft_filter_plot).pack(anchor=tk.W)
 
         # Create selection shape buttons
-        shape_frame = tk.Frame(right_frame)
+        shape_frame = ttk.Frame(right_frame)
         shape_frame.pack(side=tk.TOP, fill=tk.X, pady=25)
         self.selection_shape = tk.StringVar(value='Ellipse')
-        self.ellipse_button = tk.Button(shape_frame, text='Ellipse', command=self.select_ellipse, relief='sunken', bg='#BBBBBB')
+        self.ellipse_button = ttk.Button(shape_frame, text='Ellipse', command=self.select_ellipse, bootstyle='primary')
         self.ellipse_button.pack(side=tk.LEFT, padx=5)
-        self.rectangle_button = tk.Button(shape_frame, text='Rectangle', command=self.select_rect, relief='raised')
+        self.rectangle_button = ttk.Button(shape_frame, text='Rectangle', command=self.select_rect, bootstyle='secondary outline')
         self.rectangle_button.pack(side=tk.LEFT, padx=5)
 
-        apply_frame = tk.Frame(right_frame)
+        apply_frame = ttk.Frame(right_frame)
         apply_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
-        tk.Button(apply_frame, text='Apply Filter', command=self.apply_fft_filter).pack(side=tk.LEFT, padx=5)
+        ttk.Button(apply_frame, text='Apply Filter', command=self.apply_fft_filter, bootstyle='primary').pack(side=tk.LEFT, padx=5)
 
         # Add option to toggle the mask outside (negative) checkbox
-        mask_frame = tk.Frame(right_frame)
+        mask_frame = ttk.Frame(right_frame)
         mask_frame.pack(side=tk.TOP, fill=tk.X, pady=25)
         self.fft_mask_negative = tk.BooleanVar(value=False)
-        self.fft_mask_checkbox = tk.Checkbutton(mask_frame, text="Mask Outside (Negative)", variable=self.fft_mask_negative, command=self.update_fft_filter_plot)
+        self.fft_mask_checkbox = ttk.Checkbutton(mask_frame, text="Mask Outside (Negative)", variable=self.fft_mask_negative, command=self.update_fft_filter_plot)
         self.fft_mask_checkbox.pack(anchor=tk.N)
 
         self.shapes = np.array([]) # initialize shapes array to store drawn masks
@@ -1293,11 +1294,11 @@ class InteractiveArrayPlotter:
 
         if self.selection_shape.get() == 'Ellipse':
             self.selection_shape.set('Empty')
-            self.ellipse_button.config(relief='raised', bg='SystemButtonFace')
+            self.ellipse_button.configure(bootstyle='secondary outline')
         else:
             self.selection_shape.set('Ellipse')
-            self.ellipse_button.config(relief='sunken', bg='#BBBBBB')
-            self.rectangle_button.config(relief='raised', bg='SystemButtonFace')
+            self.ellipse_button.configure(bootstyle='primary')
+            self.rectangle_button.configure(bootstyle='secondary outline')
 
     def select_rect(self):
         #### Created by Nico Reinders ####
@@ -1305,11 +1306,11 @@ class InteractiveArrayPlotter:
 
         if self.selection_shape.get() == 'Rectangle':
             self.selection_shape.set('Empty')
-            self.rectangle_button.config(relief='raised', bg='SystemButtonFace')
+            self.rectangle_button.configure(bootstyle='secondary outline')
         else:
             self.selection_shape.set('Rectangle')
-            self.ellipse_button.config(relief='raised', bg='SystemButtonFace')
-            self.rectangle_button.config(relief='sunken', bg='#BBBBBB')
+            self.ellipse_button.configure(bootstyle='secondary outline')
+            self.rectangle_button.configure(bootstyle='primary')
 
     def fft_filter_on_press(self, event):
         #### Created by Nico Reinders ####
@@ -1730,7 +1731,7 @@ class InteractiveArrayPlotter:
         self.edit_markers = []
 
         # Create a right-click context menu for the lines listbox
-        self.lines_context_menu = tk.Menu(self.lines_listbox, tearoff=0)
+        self.lines_context_menu = ttk.Menu(self.lines_listbox, tearoff=0)
         self.lines_context_menu.add_command(label="Edit Line", command=self.start_line_editing)
         self.lines_context_menu.add_command(label="Extract Line", command=self.extract_and_plot_linecut)
         self.lines_context_menu.add_command(label="Delete Line", command=self.delete_selected_line)
@@ -2226,7 +2227,7 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
         self.file_menu.add_command(label="Save displayed Trace as NumPy array", command=self.save_trace)
 
         # Create Trace Menu
-        self.trace_menu = tk.Menu(self.menubar, tearoff=0)
+        self.trace_menu = ttk.Menu(self.menubar, tearoff=0)
         self.trace_menu.add_command(label="Toggle Histogram", command=self.open_hist_window)
         self.menubar.add_cascade(label="Traces Menu", menu=self.trace_menu)
 
@@ -2306,14 +2307,14 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
         self.update_line_plot()
 
     def open_hist_window(self):
-        self.toggle_hist_window = tk.Toplevel(self.root)
+        self.toggle_hist_window = ttk.Toplevel(self.root)
         self.toggle_hist_window.title("Histogram Settings")
         self.toggle_hist_window.geometry("400x200")
 
-        self.nbins_traces_input = tk.Entry(self.toggle_hist_window)
+        self.nbins_traces_input = ttk.Entry(self.toggle_hist_window)
         self.nbins_traces_input.pack()
         self.nbins_traces_input.insert(0, self.nbins_traces)
-        submit_button = tk.Button(self.toggle_hist_window, text="Toggle Histogram", command=self.toggle_hist)
+        submit_button = ttk.Button(self.toggle_hist_window, text="Toggle Histogram", command=self.toggle_hist, bootstyle='primary')
         submit_button.pack()
 
 
@@ -2360,11 +2361,11 @@ class TracesFitter:
 
         # Set up the main window
         if master is None:
-            self.root = tk.Tk()
+            self.root = ttk.App(theme='bootstrap-light')
             self.root.title("Traces Fitter")
             self.root.geometry("800x600")
         else:
-            self.root = tk.Toplevel(master)
+            self.root = ttk.Toplevel(master)
             self.root.title("Traces Fitter")
             # self.root.geometry("800x600")
 
@@ -2413,7 +2414,7 @@ class TracesFitter:
         self.model_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5, expand=True)
 
         # Add fit results text box
-        self.fit_results_text = tk.Text(self.model_frame, height=10, width=30, wrap=tk.WORD)
+        self.fit_results_text = ttk.Text(self.model_frame, height=10, width=30, wrap=tk.WORD)
         self.fit_results_text.grid(row=7, column=0, columnspan=2, sticky=tk.NSEW, padx=5, pady=5)
         self.fit_results_text.config(state=tk.DISABLED)
 
@@ -2664,7 +2665,7 @@ class TracesFitter:
         fit_results = np.full((num_traces, n_params), np.nan, dtype=float)
 
         # 3) Progress window (UI thread)
-        progress_win = tk.Toplevel(self.root)
+        progress_win = ttk.Toplevel(self.root)
         progress_win.title("Fitting Progress")
         progress_win.geometry("460x150")
         progress_win.transient(self.root)
@@ -2781,11 +2782,11 @@ class UtilityLinePlotter:
 
         """
         if master is None:
-            self.root = tk.Tk()
+            self.root = ttk.App(theme='bootstrap-light')
             self.root.title("Line Cut Plotter")
             self.root.geometry("800x600")
         else:
-            self.root = tk.Toplevel(master)
+            self.root = ttk.Toplevel(master)
             self.root.title("Line Cut Plotter")
             self.root.geometry("800x600")
 
@@ -2833,12 +2834,12 @@ class UtilityLinePlotter:
         line_select_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
         # Create listbox for line selection
-        self.line_listbox = tk.Listbox(line_select_frame)
+        self.line_listbox = ttk.Listbox(line_select_frame)
         self.line_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
         self.line_listbox.bind('<<ListboxSelect>>', self.on_line_select)
 
         # Create Context menu
-        self.line_context_menu = tk.Menu(self.line_listbox, tearoff=0)
+        self.line_context_menu = ttk.Menu(self.line_listbox, tearoff=0)
         self.line_context_menu.add_command(label="Offset and Scale", command=self.open_offset_scale_window)
         self.line_context_menu.add_command(label="Fit Model", command=self.open_fit_custom_model)
         self.line_context_menu.add_command(label="Export Line Trace", command=self.open_export_window)
@@ -2975,7 +2976,7 @@ class UtilityLinePlotter:
             return
 
         # Create a new dialog window
-        dialog = tk.Toplevel(self.root)
+        dialog = ttk.Toplevel(self.root)
         dialog.title("Offset and Scale Line")
         dialog.geometry("300x270")
         #dialog.resizable(False, False)
@@ -3021,7 +3022,7 @@ class UtilityLinePlotter:
             return
 
         # Create a new dialog window
-        dialog = tk.Toplevel(self.root)
+        dialog = ttk.Toplevel(self.root)
         dialog.title("Fit Custom Model")
         dialog.geometry("400x350")
 
@@ -3150,7 +3151,7 @@ class UtilityLinePlotter:
         x_data, y_data, label = self.data[self.selected_line_idx]
 
         # Create a new dialog window
-        export_dialog = tk.Toplevel(self.root)
+        export_dialog = ttk.Toplevel(self.root)
         export_dialog.title("Export Line Trace")
         export_dialog.geometry("300x150")
         export_dialog.transient(self.root)
@@ -3237,4 +3238,3 @@ class UtilityLinePlotter:
 
         # Draw the canvas
         self.canvas.draw()
-

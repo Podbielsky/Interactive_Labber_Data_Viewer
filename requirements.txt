@@ -8,3 +8,4 @@ autograd~=1.7.0
 pillow~=10.2.0
 numba==0.58.1
 tkinterdnd2
+ttkbootstrap==2.2.2

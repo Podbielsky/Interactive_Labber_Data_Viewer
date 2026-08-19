@@ -142,10 +142,11 @@ printf 'Installing required packages...\n'
     "matplotlib==3.5.0" \
     "numba==0.58.1" \
     h5py \
-    tkinterdnd2
+    tkinterdnd2 \
+    "ttkbootstrap==2.2.2"
 
 "$LABBER_VENV_DIR/bin/python" -c \
-    'import h5py, matplotlib, numba, numpy, scipy, tkinter, tkinterdnd2'
+    'import h5py, matplotlib, numba, numpy, scipy, tkinter, tkinterdnd2, ttkbootstrap'
 
 printf 'Copying application files...\n'
 for LABBER_APPLICATION_FILE in "${LABBER_APPLICATION_FILES[@]}"; do
