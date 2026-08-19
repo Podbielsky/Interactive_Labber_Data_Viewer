@@ -4,6 +4,7 @@ import json
 import queue
 import re
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -32,6 +33,8 @@ GITHUB_API_URL = f'https://api.github.com/repos/{GITHUB_REPOSITORY}'
 GITHUB_REPOSITORY_URL = f'https://github.com/{GITHUB_REPOSITORY}'
 VERSION_METADATA_FILE = 'labber_hdf5_viewer_version.json'
 UPDATE_CHECK_TIMEOUT_SECONDS = 10
+PREFERENCES_FILE_NAME = 'preferences.json'
+PREFERENCES_DIRECTORY_NAME = 'Labber HDF5 Viewer'
 
 
 def set_application_icon(window):
@@ -54,6 +57,67 @@ def set_application_icon(window):
             return
 
 
+def get_preferences_path():
+    """Return the user-local preferences path for the current platform."""
+    user_home = os.path.expanduser('~')
+
+    if os.name == 'nt':
+        config_directory = os.environ.get('APPDATA')
+        if not config_directory:
+            config_directory = os.path.join(user_home, 'AppData', 'Roaming')
+    elif sys.platform == 'darwin':
+        config_directory = os.path.join(user_home, 'Library', 'Application Support')
+    else:
+        config_directory = os.environ.get('XDG_CONFIG_HOME')
+        if not config_directory or not os.path.isabs(config_directory):
+            config_directory = os.path.join(user_home, '.config')
+
+    return os.path.join(
+        config_directory,
+        PREFERENCES_DIRECTORY_NAME,
+        PREFERENCES_FILE_NAME,
+    )
+
+
+def load_application_preferences():
+    """Load preferences, returning defaults for missing or invalid files."""
+    try:
+        with open(get_preferences_path(), 'r', encoding='utf-8-sig') as preferences_file:
+            preferences = json.load(preferences_file)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+
+    return preferences if isinstance(preferences, dict) else {}
+
+
+def save_application_style(theme_name):
+    """Persist the selected theme in the current user's preferences."""
+    preferences_path = get_preferences_path()
+    preferences = load_application_preferences()
+    preferences['theme'] = theme_name
+    os.makedirs(os.path.dirname(preferences_path), exist_ok=True)
+
+    temporary_path = f'{preferences_path}.{os.getpid()}.tmp'
+    try:
+        with open(temporary_path, 'w', encoding='utf-8') as preferences_file:
+            json.dump(preferences, preferences_file, indent=2)
+            preferences_file.write('\n')
+        os.replace(temporary_path, preferences_path)
+    except OSError:
+        try:
+            os.remove(temporary_path)
+        except OSError:
+            pass
+        raise
+
+
+def apply_saved_application_style(root):
+    """Apply the saved theme when it is still available."""
+    theme_name = load_application_preferences().get('theme')
+    if isinstance(theme_name, str) and theme_name in root.theme_names():
+        root.theme_use(theme_name)
+
+
 def change_application_style(root, theme_variable, theme_name):
     """Apply a ttkbootstrap theme to the running application."""
     try:
@@ -63,6 +127,16 @@ def change_application_style(root, theme_variable, theme_name):
         messagebox.showerror(
             'Style Error',
             f'Could not apply the {theme_name!r} style:\n{error}',
+            parent=root,
+        )
+        return
+
+    try:
+        save_application_style(theme_name)
+    except OSError as error:
+        messagebox.showwarning(
+            'Style Not Saved',
+            f'The style was applied but could not be remembered:\n{error}',
             parent=root,
         )
 
@@ -1362,6 +1436,7 @@ def main():
     # Create the themed application root window.
     hdf5Data = HDF5Data(wdir=wdir)
     root = ttk.App(theme=DEFAULT_THEME)
+    apply_saved_application_style(root)
     set_application_icon(root)
     data_bar = data_menu_bar(root, hdf5Data)
     root.config(menu=data_bar)

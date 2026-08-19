@@ -96,6 +96,7 @@ Changing the interface style
 - Open the Style menu next to File, Data, and Plotting.
 - Choose a theme from the Light or Dark submenu.
 - The selected theme is applied immediately to all open viewer windows.
+- The selected theme is remembered and restored the next time the viewer starts.
 
 
 Opening HDF5 files with drag and drop
