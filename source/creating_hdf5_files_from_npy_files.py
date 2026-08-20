@@ -1,8 +1,328 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import os
+import tempfile
+
 import ttkbootstrap as ttk
 import numpy as np
 import h5py
+
+
+def _as_real_numeric_array(value, field_name):
+    """Return a NumPy array suitable for plotting, or raise a useful error."""
+    array = np.asarray(value)
+    if not np.issubdtype(array.dtype, np.number) or np.iscomplexobj(array):
+        raise ValueError(
+            f"The {field_name!r} field must contain real numeric values; "
+            f"its dtype is {array.dtype}."
+        )
+    return array
+
+
+def normalize_xyz_arrays(x_data, y_data, z_data):
+    """Expand 1D coordinates to grids matching a one- or two-dimensional Z."""
+    z_array = _as_real_numeric_array(z_data, 'z')
+    if z_array.ndim == 1:
+        z_grid = z_array.reshape(1, -1)
+    elif z_array.ndim == 2:
+        z_grid = z_array
+    else:
+        raise ValueError(
+            f"The z field must be a 1D or 2D array, not {z_array.ndim}D."
+        )
+    if z_grid.size == 0:
+        raise ValueError('The z field must not be empty.')
+
+    rows, columns = z_grid.shape
+
+    def expand_coordinate(value, axis_name):
+        coordinate = _as_real_numeric_array(value, axis_name)
+        if coordinate.ndim == 2:
+            if coordinate.shape != z_grid.shape:
+                raise ValueError(
+                    f"The 2D {axis_name} grid has shape {coordinate.shape}, but "
+                    f"z has shape {z_grid.shape}."
+                )
+            return coordinate
+        if coordinate.ndim != 1:
+            raise ValueError(
+                f"The {axis_name} field must be a 1D array or 2D grid, not "
+                f"{coordinate.ndim}D."
+            )
+
+        expected_length = columns if axis_name == 'x' else rows
+        if coordinate.size not in (1, expected_length):
+            orientation = 'columns' if axis_name == 'x' else 'rows'
+            raise ValueError(
+                f"The 1D {axis_name} array has length {coordinate.size}. It must "
+                f"have length {expected_length} (the number of z {orientation})"
+                " or contain one constant value."
+            )
+
+        if coordinate.size == 1:
+            return np.full(z_grid.shape, coordinate[0], dtype=coordinate.dtype)
+        if axis_name == 'x':
+            return np.broadcast_to(coordinate.reshape(1, columns), z_grid.shape)
+        return np.broadcast_to(coordinate.reshape(rows, 1), z_grid.shape)
+
+    return expand_coordinate(x_data, 'x'), expand_coordinate(y_data, 'y'), z_grid
+
+
+def write_xyz_hdf5(output_path, x_data, y_data, z_data, channel_names=None,
+                   overwrite=False):
+    """Write x/y/z data in the Labber-compatible layout used by the viewer."""
+    output_path = os.path.abspath(os.path.expanduser(output_path))
+    if os.path.exists(output_path) and not overwrite:
+        raise FileExistsError(f"The output file already exists:\n{output_path}")
+
+    x_grid, y_grid, z_grid = normalize_xyz_arrays(x_data, y_data, z_data)
+    names = channel_names or ('X-axis', 'Y-axis', 'Z-axis')
+    if len(names) != 3:
+        raise ValueError('Exactly three channel names are required.')
+
+    output_directory = os.path.dirname(output_path)
+    if not os.path.isdir(output_directory):
+        raise FileNotFoundError(
+            f"The output directory does not exist:\n{output_directory}"
+        )
+
+    dataset = np.stack((x_grid, y_grid, z_grid), axis=1)
+    channel_dtype = np.dtype([('Name', 'S256'), ('Info', 'S256')])
+    encoded_names = [str(name).encode('utf-8') for name in names]
+    channels = np.array(
+        [(encoded_name, b'') for encoded_name in encoded_names],
+        dtype=channel_dtype,
+    )
+    log_list = np.array([(encoded_names[2], b'')], dtype=channel_dtype)
+
+    descriptor, temporary_path = tempfile.mkstemp(
+        prefix=f'.{os.path.basename(output_path)}.',
+        suffix='.tmp',
+        dir=output_directory,
+    )
+    os.close(descriptor)
+    try:
+        with h5py.File(temporary_path, 'w') as hdf5_file:
+            data_group = hdf5_file.create_group('Data')
+            data_group.create_dataset('Data', data=dataset)
+            data_group.create_dataset('Channel names', data=channels)
+            data_group.attrs['Step dimensions'] = list(z_grid.shape)
+            data_group.attrs['Step index'] = [0, 1]
+            data_group.attrs['Completed'] = True
+            hdf5_file.create_dataset('Log list', data=log_list)
+        os.replace(temporary_path, output_path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.remove(temporary_path)
+
+    return output_path
+
+
+def get_npz_output_path(npz_path):
+    """Return the sibling .hdf5 path used for a dropped .npz archive."""
+    normalized_path = os.path.abspath(os.path.expanduser(npz_path))
+    return os.path.splitext(normalized_path)[0] + '.hdf5'
+
+
+def inspect_npz_fields(npz_path):
+    """Validate NPZ fields as safe NumPy arrays and return their descriptions."""
+    field_information = []
+    invalid_fields = []
+    with np.load(npz_path, allow_pickle=False) as archive:
+        for field_name in archive.files:
+            try:
+                value = archive[field_name]
+            except ValueError:
+                invalid_fields.append(field_name)
+                continue
+            if not isinstance(value, np.ndarray):
+                invalid_fields.append(field_name)
+                continue
+            field_information.append(
+                (field_name, f'shape={value.shape}, dtype={value.dtype}')
+            )
+
+    if invalid_fields:
+        formatted_names = ', '.join(repr(name) for name in invalid_fields)
+        raise ValueError(
+            'Every NPZ field must be a NumPy array that can be read without '
+            f'pickle. Invalid field(s): {formatted_names}'
+        )
+    return field_information
+
+
+class NPZFieldSelectionDialog:
+    """Modal dialog for assigning NPZ fields to the viewer's x/y/z roles."""
+
+    def __init__(self, parent, field_information, include_y):
+        self.result = None
+        self.field_names = [name for name, _detail in field_information]
+        self.roles = ('x', 'y', 'z') if include_y else ('x', 'z')
+        self.window = ttk.Toplevel(parent)
+        self.window.title('Select NPZ Fields')
+        self.window.transient(parent)
+        self.window.resizable(True, False)
+        self.window.protocol('WM_DELETE_WINDOW', self.cancel)
+
+        ttk.Label(
+            self.window,
+            text=(
+                'Assign each data role to a field in the dropped NPZ archive. '
+                'Every role must use a different field.'
+            ),
+            wraplength=620,
+            justify='left',
+        ).pack(fill='x', padx=16, pady=(16, 8))
+
+        details_frame = ttk.LabelFrame(self.window, text='Available fields')
+        details_frame.pack(fill='x', padx=16, pady=8)
+        for field_name, detail in field_information:
+            ttk.Label(
+                details_frame,
+                text=f'{field_name}: {detail}',
+                anchor='w',
+            ).pack(fill='x', padx=10, pady=2)
+
+        selection_frame = ttk.Frame(self.window)
+        selection_frame.pack(fill='x', padx=16, pady=8)
+        self.variables = {}
+        default_fields = self._default_fields()
+        for row, role in enumerate(self.roles):
+            ttk.Label(selection_frame, text=f'{role.upper()} field:').grid(
+                row=row, column=0, sticky='w', padx=(0, 8), pady=4
+            )
+            variable = tk.StringVar(
+                master=self.window,
+                value=default_fields[role],
+            )
+            self.variables[role] = variable
+            ttk.Combobox(
+                selection_frame,
+                textvariable=variable,
+                values=self.field_names,
+                state='readonly',
+                width=42,
+            ).grid(row=row, column=1, sticky='ew', pady=4)
+        selection_frame.columnconfigure(1, weight=1)
+
+        if not include_y:
+            ttk.Label(
+                self.window,
+                text='Y will be generated as the one-value array [0.0].',
+                bootstyle='secondary',
+            ).pack(fill='x', padx=16, pady=(0, 8))
+
+        button_frame = ttk.Frame(self.window)
+        button_frame.pack(fill='x', padx=16, pady=(8, 16))
+        ttk.Button(
+            button_frame,
+            text='Cancel',
+            command=self.cancel,
+            bootstyle='secondary',
+        ).pack(side='right')
+        ttk.Button(
+            button_frame,
+            text='Create HDF5',
+            command=self.confirm,
+            bootstyle='success',
+        ).pack(side='right', padx=(0, 8))
+
+        self.window.bind('<Escape>', lambda _event: self.cancel())
+        self.window.grab_set()
+
+    def _default_fields(self):
+        lower_case_names = {
+            name.casefold(): name for name in self.field_names
+        }
+        defaults = {}
+        unused_names = list(self.field_names)
+        for role in self.roles:
+            preferred_name = lower_case_names.get(role)
+            if preferred_name in unused_names:
+                selected_name = preferred_name
+            else:
+                selected_name = unused_names[0]
+            defaults[role] = selected_name
+            unused_names.remove(selected_name)
+        return defaults
+
+    def confirm(self):
+        selected = {role: variable.get() for role, variable in self.variables.items()}
+        if len(set(selected.values())) != len(selected):
+            messagebox.showerror(
+                'Duplicate NPZ Field',
+                'Choose a different NPZ field for each role.',
+                parent=self.window,
+            )
+            return
+        if 'y' not in selected:
+            selected['y'] = None
+        self.result = selected
+        self.window.destroy()
+
+    def cancel(self):
+        self.window.destroy()
+
+    def show(self):
+        self.window.wait_window()
+        return self.result
+
+
+def select_npz_field_mapping(parent, npz_path):
+    """Ask the user to assign NPZ fields to x/y/z roles."""
+    field_information = inspect_npz_fields(npz_path)
+    field_names = [name for name, _detail in field_information]
+    if len(field_names) < 2:
+        raise ValueError('An NPZ file must contain at least two fields.')
+
+    dialog = NPZFieldSelectionDialog(
+        parent,
+        field_information,
+        include_y=len(field_names) != 2,
+    )
+    return dialog.show()
+
+
+def convert_npz_to_hdf5(npz_path, field_mapping, overwrite=False):
+    """Convert selected fields from an NPZ archive into a sibling HDF5 file."""
+    normalized_path = os.path.abspath(os.path.expanduser(npz_path))
+    if os.path.splitext(normalized_path)[1].lower() != '.npz':
+        raise ValueError('Only .npz archives can be converted by this function.')
+    if not os.path.isfile(normalized_path):
+        raise FileNotFoundError(f"The dropped file does not exist:\n{normalized_path}")
+
+    required_roles = ('x', 'z')
+    if not all(field_mapping.get(role) for role in required_roles):
+        raise ValueError('The NPZ field mapping must define x and z fields.')
+
+    with np.load(normalized_path, allow_pickle=False) as archive:
+        missing_fields = [
+            field_name
+            for field_name in field_mapping.values()
+            if field_name is not None and field_name not in archive.files
+        ]
+        if missing_fields:
+            raise ValueError(
+                'The selected NPZ field was not found: ' + ', '.join(missing_fields)
+            )
+        x_data = np.array(archive[field_mapping['x']], copy=True)
+        z_data = np.array(archive[field_mapping['z']], copy=True)
+        if field_mapping.get('y') is None:
+            y_data = np.array([0.0])
+            y_name = 'Y (dummy)'
+        else:
+            y_data = np.array(archive[field_mapping['y']], copy=True)
+            y_name = field_mapping['y']
+
+    return write_xyz_hdf5(
+        get_npz_output_path(normalized_path),
+        x_data,
+        y_data,
+        z_data,
+        channel_names=(field_mapping['x'], y_name, field_mapping['z']),
+        overwrite=overwrite,
+    )
+
 
 class CreateHDF5File:
     def __init__(self, root):

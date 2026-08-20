@@ -99,10 +99,30 @@ Changing the interface style
 - The selected theme is remembered and restored the next time the viewer starts.
 
 
-Opening HDF5 files with drag and drop
+Opening HDF5 and NPZ files with drag and drop
 -->
-- Drag one .hdf5 or .h5 file from the file manager onto the HDF5 file tree.
-- The viewer validates and opens the dropped file immediately.
+- Drag one .hdf5, .h5, or .npz file from the file manager onto the HDF5 file
+  tree.
+- The viewer validates and opens a dropped HDF5 file immediately.
+- A dropped NPZ archive is converted to an HDF5 file with the same base name in
+  the same directory. The converted file is then opened automatically. If that
+  HDF5 file already exists, the viewer asks before replacing it.
+- NPZ loading and HDF5 writing run in the background after field assignment.
+  The message above the file tree shows the conversion status.
+- If the archive contains three or more fields, a selection window asks which
+  fields represent x, y, and z. Fields named x, y, and z (case-insensitive) are
+  preselected when available. Each role must use a different field.
+- If an NPZ archive contains exactly two fields, the selection window asks which
+  field is x and which is z. The converter creates the missing y coordinate as
+  the one-value array [0.0].
+- z may be a 1D or 2D real numeric array. A 1D z array is treated as a map with
+  one row. x and y must be real numeric 1D arrays or 2D coordinate grids.
+- For a 2D z array with shape (rows, columns), a 1D x array must contain one
+  value or "columns" values, and a 1D y array must contain one value or "rows"
+  values. A 2D x or y grid must have exactly the same shape as z.
+- Before opening the assignment window, the viewer verifies that every field is
+  a NumPy array that can be read without pickle. Object arrays that require
+  Python pickle loading are rejected and reported by field name.
 - Drop only one file at a time. Files with spaces in their names are supported.
 
 

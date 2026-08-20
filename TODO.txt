@@ -12,6 +12,12 @@ TODO list for next versions:
 - implement a new tool to plot time trace maps
 
 - implement external traces
+- Fix `Add Traces from HDF5 File`: preserve `/Traces` creation order, copy all
+  selected datasets, prevent nested `/Traces/Traces` groups, validate shapes,
+  and report failures in the GUI.
+- Fix `Generate Traces from Dataset` so that its flattened trace order matches
+  the viewer's `trace_index = y_index * D0 + x_index` lookup without a manual
+  transpose.
 
 - rescaling of line-plots in the line-cut section should be improved to get better visibility
 

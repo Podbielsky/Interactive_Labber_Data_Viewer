@@ -21,7 +21,12 @@ import shutil
 from HDF5Data import HDF5Data
 from interactive_plotting_tools import InteractiveArrayPlotter
 from interactive_plotting_tools import InteractiveArrayAndLinePlotter
-from creating_hdf5_files_from_npy_files import CreateHDF5File
+from creating_hdf5_files_from_npy_files import (
+    CreateHDF5File,
+    convert_npz_to_hdf5,
+    get_npz_output_path,
+    select_npz_field_mapping,
+)
 
 import traceback
 
@@ -30,6 +35,7 @@ array_plotters = []
 list_name = ['Channels', 'Instrument config', 'Instruments', 'Log list', 'Settings', 'Step config', 'Step list', 'Tags', 'Views']
 DEFAULT_THEME = 'bootstrap-light'
 HDF5_FILE_EXTENSIONS = {'.h5', '.hdf5'}
+NPZ_FILE_EXTENSION = '.npz'
 GITHUB_REPOSITORY = 'Podbielsky/Interactive_Labber_Data_Viewer'
 GITHUB_MAIN_BRANCH = 'main'
 GITHUB_API_URL = f'https://api.github.com/repos/{GITHUB_REPOSITORY}'
@@ -1707,6 +1713,10 @@ def get_values_above_clicked_node(item, tree):
 
 def display_hdf5_file(root, hdf5Data):
 
+    drop_instruction = (
+        'Drop one .hdf5, .h5, or .npz file onto the tree to open it'
+    )
+
     # Function to open an HDF5 file
     def open_hdf5_file():
         if not hdf5Data.readpath:
@@ -1748,22 +1758,128 @@ def display_hdf5_file(root, hdf5Data):
         root.title(f'HDF5 File Viewer — {hdf5Data.file_name}')
         return True
 
-    def on_hdf5_drop(event):
-        """Open one HDF5 file dropped onto the file tree."""
+    def begin_npz_conversion(dropped_path):
+        """Collect field choices, then convert an NPZ without blocking Tk."""
+        if getattr(root, '_labber_npz_conversion_running', False):
+            messagebox.showinfo(
+                'NPZ Conversion in Progress',
+                'Please wait for the current NPZ conversion to finish.',
+                parent=root,
+            )
+            return
+
+        try:
+            field_mapping = select_npz_field_mapping(root, dropped_path)
+            if field_mapping is None:
+                return
+
+            hdf5_path = get_npz_output_path(dropped_path)
+            overwrite = False
+            if os.path.exists(hdf5_path):
+                overwrite = messagebox.askyesno(
+                    'Replace Existing HDF5 File',
+                    'The target HDF5 file already exists:\n'
+                    f'{hdf5_path}\n\nReplace it with data from the NPZ file?',
+                    parent=root,
+                )
+                if not overwrite:
+                    return
+        except Exception as error:
+            messagebox.showerror(
+                'Could Not Read NPZ File',
+                str(error),
+                parent=root,
+            )
+            return
+
+        root._labber_npz_conversion_running = True
+        root.configure(cursor='watch')
+        drop_label.configure(
+            text=f'Converting {os.path.basename(dropped_path)} to HDF5...',
+            bootstyle='info',
+        )
+        result_queue = queue.Queue(maxsize=1)
+
+        def conversion_worker():
+            try:
+                converted_path = convert_npz_to_hdf5(
+                    dropped_path,
+                    field_mapping,
+                    overwrite=overwrite,
+                )
+                result_queue.put(('success', converted_path))
+            except Exception as error:
+                result_queue.put(('error', error))
+
+        def finish_npz_conversion():
+            try:
+                result_type, result = result_queue.get_nowait()
+            except queue.Empty:
+                try:
+                    root.after(100, finish_npz_conversion)
+                except tk.TclError:
+                    pass
+                return
+
+            root._labber_npz_conversion_running = False
+            root.configure(cursor='')
+            drop_label.configure(text=drop_instruction, bootstyle='secondary')
+
+            if result_type == 'error':
+                messagebox.showerror(
+                    'NPZ Conversion Failed',
+                    str(result),
+                    parent=root,
+                )
+                return
+
+            try:
+                set_hdf5_path(hdf5Data, result)
+            except (OSError, ValueError) as error:
+                messagebox.showerror(
+                    'Could Not Open Converted HDF5 File',
+                    str(error),
+                    parent=root,
+                )
+                return
+            open_hdf5_file()
+
+        threading.Thread(target=conversion_worker, daemon=True).start()
+        root.after(100, finish_npz_conversion)
+
+    def on_data_file_drop(event):
+        """Open HDF5 directly or schedule conversion of a dropped NPZ file."""
         dropped_paths = root.tk.splitlist(event.data)
         if len(dropped_paths) != 1:
             messagebox.showerror(
-                'Drop One HDF5 File',
-                'Please drop exactly one .hdf5 or .h5 file at a time.',
+                'Drop One Data File',
+                'Please drop exactly one .hdf5, .h5, or .npz file at a time.',
                 parent=root,
             )
             return REFUSE_DROP
 
+        dropped_path = os.path.abspath(os.path.expanduser(dropped_paths[0]))
+        extension = os.path.splitext(dropped_path)[1].lower()
+        if extension == NPZ_FILE_EXTENSION:
+            # Returning from the TkDND callback before opening a modal dialog
+            # avoids a nested-event-loop deadlock on some Tk/macOS versions.
+            root.after_idle(
+                lambda selected_path=dropped_path: begin_npz_conversion(
+                    selected_path
+                )
+            )
+            return COPY
+
         try:
-            set_hdf5_path(hdf5Data, dropped_paths[0])
+            if extension in HDF5_FILE_EXTENSIONS:
+                set_hdf5_path(hdf5Data, dropped_path)
+            else:
+                raise ValueError(
+                    'Only .hdf5, .h5, and .npz files can be dropped here.'
+                )
         except (OSError, ValueError) as error:
             messagebox.showerror(
-                'Invalid HDF5 File',
+                'Could Not Open Data File',
                 str(error),
                 parent=root,
             )
@@ -1844,7 +1960,7 @@ def display_hdf5_file(root, hdf5Data):
 
     drop_label = ttk.Label(
         root,
-        text='Drop one .hdf5 or .h5 file onto the tree to open it',
+        text=drop_instruction,
         bootstyle='secondary',
     )
     drop_label.pack(padx=10, pady=(0, 5), anchor='w')
@@ -1865,10 +1981,13 @@ def display_hdf5_file(root, hdf5Data):
     try:
         TkinterDnD.require(root)
         tree.drop_target_register(DND_FILES)
-        tree.dnd_bind('<<Drop>>', on_hdf5_drop)
+        tree.dnd_bind('<<Drop>>', on_data_file_drop)
     except (RuntimeError, tk.TclError) as error:
         drop_label.configure(
-            text='Drag and drop is unavailable; use File → Select File Directory.',
+            text=(
+                'Drag and drop is unavailable; HDF5 files can still be opened '
+                'from File → Select File Directory.'
+            ),
             bootstyle='warning',
         )
         print(f'Drag and drop could not be enabled: {error}')
@@ -1884,6 +2003,13 @@ def main():
             messagebox.showinfo(
                 'Update In Progress',
                 'Please wait until the update installation has finished.',
+                parent=root,
+            )
+            return
+        if getattr(root, '_labber_npz_conversion_running', False):
+            messagebox.showinfo(
+                'NPZ Conversion in Progress',
+                'Please wait until the NPZ conversion has finished.',
                 parent=root,
             )
             return
