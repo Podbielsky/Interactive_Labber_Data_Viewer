@@ -69,6 +69,7 @@ def skewed_gaussian_func_shape(x, x0, sigma, alpha):
     :type alpha: float
     :return: The skewed Gaussian value(s) corresponding to the input `x`.
     :rtype: float or numpy.ndarray
+
     """
     z = (x - x0) / sigma
     gauss_cum = 1/2 * (1 + erf(alpha * z/np.sqrt(2)))
