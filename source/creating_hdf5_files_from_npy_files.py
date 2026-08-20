@@ -86,7 +86,14 @@ def write_xyz_hdf5(output_path, x_data, y_data, z_data, channel_names=None,
             f"The output directory does not exist:\n{output_directory}"
         )
 
-    dataset = np.stack((x_grid, y_grid, z_grid), axis=1)
+    # Labber stores the two sweep dimensions in the opposite order from the
+    # conventional NumPy (y, x) map layout. The viewer swaps these dimensions
+    # while loading, so store transposed grids to recover X-by-column and
+    # Y-by-row coordinates in the plotter.
+    stored_x_grid = x_grid.T
+    stored_y_grid = y_grid.T
+    stored_z_grid = z_grid.T
+    dataset = np.stack((stored_x_grid, stored_y_grid, stored_z_grid), axis=1)
     channel_dtype = np.dtype([('Name', 'S256'), ('Info', 'S256')])
     encoded_names = [str(name).encode('utf-8') for name in names]
     channels = np.array(
@@ -106,7 +113,7 @@ def write_xyz_hdf5(output_path, x_data, y_data, z_data, channel_names=None,
             data_group = hdf5_file.create_group('Data')
             data_group.create_dataset('Data', data=dataset)
             data_group.create_dataset('Channel names', data=channels)
-            data_group.attrs['Step dimensions'] = list(z_grid.shape)
+            data_group.attrs['Step dimensions'] = list(stored_z_grid.shape)
             data_group.attrs['Step index'] = [0, 1]
             data_group.attrs['Completed'] = True
             hdf5_file.create_dataset('Log list', data=log_list)

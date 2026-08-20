@@ -20,14 +20,20 @@ from matplotlib.path import Path
 from matplotlib.transforms import TransformedPath
 from scipy.ndimage import gaussian_filter
 from scipy.signal import savgol_filter
-from scipy import constants as co
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, two_d_ifft_on_data, evaluate_poly_background_2d,
                                           correct_median_diff, correct_mean_of_lines, gradient_5p_stencil,
                                           subtract_trace_average, cut_data_range, extract_linecut,
-                                          skewed_gaussian_func_shape, beta_func_shape, trace_wise_min_max_scaling, lorentzian, gaussian)
+                                          skewed_gaussian_func_shape, beta_func_shape, trace_wise_min_max_scaling)
 from gamma_map import (get_t_rates, get_fourier, fft_correction_select, fft_correction_apply, get_cuts)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap, make_half_red_map, make_half_blue_map
-from scipy import optimize
+from fitting_tools import (
+    DEFAULT_FIT_EXPRESSION,
+    DEFAULT_MAXFEV,
+    FIT_EXPRESSION_EXAMPLE,
+    FitModelDefinition,
+    default_initial_value,
+    format_fit_result,
+)
 neon_cmap = make_neon_cyclic_colormap()
 bi_map = make_bi_colormap() # take out
 half_red_map = make_half_red_map()
@@ -37,6 +43,70 @@ plt.register_cmap(name='RedMap', cmap=half_red_map)
 plt.register_cmap(name='BlueMap', cmap=half_blue_map)
 plt.register_cmap(name='NeonPiCy', cmap=neon_cmap)
 rc('pdf', fonttype=42)
+
+
+def _normalized_grid_variation(grid, axis):
+    """Measure coordinate variation along one grid axis independent of units."""
+    finite_values = np.asarray(grid, dtype=float)
+    finite_values = finite_values[np.isfinite(finite_values)]
+    if finite_values.size < 2:
+        return 0.0
+    value_range = np.ptp(finite_values)
+    if not np.isfinite(value_range) or value_range == 0:
+        return 0.0
+    differences = np.abs(np.diff(np.asarray(grid, dtype=float), axis=axis))
+    if not np.any(np.isfinite(differences)):
+        return 0.0
+    return float(np.nanmedian(differences) / value_range)
+
+
+def canonicalize_plot_grid(x_grid, y_grid, data_grid):
+    """Orient a 2D coordinate grid so X varies by column and Y by row."""
+    x_array = np.asarray(x_grid)
+    y_array = np.asarray(y_grid)
+    data_array = np.asarray(data_grid)
+    if x_array.ndim != 2 or y_array.ndim != 2 or data_array.ndim != 2:
+        raise ValueError('X, Y, and displayed data must all be two-dimensional.')
+    if x_array.shape != y_array.shape or x_array.shape != data_array.shape:
+        raise ValueError(
+            'X, Y, and displayed data must have matching shapes; got '
+            f'{x_array.shape}, {y_array.shape}, and {data_array.shape}.'
+        )
+
+    standard_score = (
+        _normalized_grid_variation(x_array, axis=1)
+        + _normalized_grid_variation(y_array, axis=0)
+    )
+    transposed_score = (
+        _normalized_grid_variation(x_array, axis=0)
+        + _normalized_grid_variation(y_array, axis=1)
+    )
+    if transposed_score > standard_score + 1e-12:
+        return x_array.T, y_array.T, data_array.T
+    return x_array, y_array, data_array
+
+
+def nearest_grid_indices(x_grid, y_grid, x_value, y_value):
+    """Return the nearest (row, column) using both 2D coordinates."""
+    x_array = np.asarray(x_grid, dtype=float)
+    y_array = np.asarray(y_grid, dtype=float)
+    valid = np.isfinite(x_array) & np.isfinite(y_array)
+    if not np.any(valid):
+        return None
+
+    x_range = np.ptp(x_array[valid])
+    y_range = np.ptp(y_array[valid])
+    x_scale = x_range if np.isfinite(x_range) and x_range > 0 else 1.0
+    y_scale = y_range if np.isfinite(y_range) and y_range > 0 else 1.0
+    distances = np.full(x_array.shape, np.inf, dtype=float)
+    distances[valid] = (
+        ((x_array[valid] - x_value) / x_scale) ** 2
+        + ((y_array[valid] - y_value) / y_scale) ** 2
+    )
+    return tuple(int(index) for index in np.unravel_index(
+        np.argmin(distances),
+        distances.shape,
+    ))
 
 
 
@@ -299,6 +369,7 @@ class InteractiveArrayPlotter:
         self.click_cid = None
         self.move_cid = None
         self.motion_cid = None
+        self.crosshair_motion_cid = None
         self.release_cid = None
         self.start_point = None # Added by Nico Reinders for error handling in 2D FFT filter
 
@@ -519,6 +590,12 @@ class InteractiveArrayPlotter:
                 self.name_data_y_axis = str(np.flip(self.data.name_axis)[-1])
                 self.name_data_x_axis = str(np.flip(self.data.name_axis)[-2])
 
+        self.X, self.Y, self.sliced_data = canonicalize_plot_grid(
+            self.X,
+            self.Y,
+            self.sliced_data,
+        )
+
         if hasattr(self, 'cbar'):
             self.cbar.remove()
             del self.cbar
@@ -571,18 +648,30 @@ class InteractiveArrayPlotter:
                 self.vert_line = self.ax.axvline(color='gray', lw=1, ls='--', zorder=10)
             else:
                 self.vert_line.set_visible(True)
-            self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
+            if self.crosshair_motion_cid is None:
+                self.crosshair_motion_cid = self.canvas.mpl_connect(
+                    'motion_notify_event',
+                    self.on_mouse_move,
+                )
         else:
             self.ax_vline.set_visible(False)
             self.ax_hline.set_visible(False)
 
             if self.horiz_line:
-                self.horiz_line.set_visible(False)
+                try:
+                    self.horiz_line.remove()
+                except ValueError:
+                    pass
                 self.horiz_line = None
             if self.vert_line:
-                self.vert_line.set_visible(False)
+                try:
+                    self.vert_line.remove()
+                except ValueError:
+                    pass
                 self.vert_line = None
-            self.canvas.mpl_disconnect('motion_notify_event')
+            if self.crosshair_motion_cid is not None:
+                self.canvas.mpl_disconnect(self.crosshair_motion_cid)
+                self.crosshair_motion_cid = None
 
         # Redraw the entire figure to ensure layout is updated
         self.figure.canvas.draw_idle()
@@ -660,8 +749,23 @@ class InteractiveArrayPlotter:
         self.move_cid = self.canvas.mpl_connect('motion_notify_event', on_move)
 
     def refresh_crosshair(self):
-        self.toggle_crosshair()
-        self.toggle_crosshair()
+        if not self.crosshair_enabled:
+            return
+        for line_artist in (self.horiz_line, self.vert_line):
+            if line_artist is not None:
+                try:
+                    line_artist.remove()
+                except ValueError:
+                    pass
+        self.horiz_line = self.ax.axhline(
+            color='gray', lw=1, ls='--', zorder=10
+        )
+        self.vert_line = self.ax.axvline(
+            color='gray', lw=1, ls='--', zorder=10
+        )
+        self.ax_vline.set_visible(True)
+        self.ax_hline.set_visible(True)
+        self.figure.canvas.draw_idle()
 
     def init_movable_lines(self):
         # Initial positions for vmin and vmax lines
@@ -714,19 +818,29 @@ class InteractiveArrayPlotter:
 
     def on_mouse_move(self, event):
 
-        if not event.inaxes or not self.crosshair_enabled:
+        if event.inaxes != self.ax or not self.crosshair_enabled:
             return
 
         if not self.freeze_linecut:
             # Update the position of the crosshair lines
-            self.horiz_line.set_ydata(event.ydata)
-            self.vert_line.set_xdata(event.xdata)
+            self.horiz_line.set_ydata([event.ydata, event.ydata])
+            self.vert_line.set_xdata([event.xdata, event.xdata])
 
-            self.x_index = np.argmin(np.abs(self.X[0] - event.xdata))
-            self.y_index = np.argmin(np.abs(self.Y[:, 0] - event.ydata))
+            grid_indices = nearest_grid_indices(
+                self.X,
+                self.Y,
+                event.xdata,
+                event.ydata,
+            )
+            if grid_indices is None:
+                return
+            self.y_index, self.x_index = grid_indices
             # Update the vertical line plot
             self.ax_vline.clear()
-            self.ax_vline.plot(self.sliced_data[:, self.x_index], self.Y[:, 0])
+            self.ax_vline.plot(
+                self.sliced_data[:, self.x_index],
+                self.Y[:, self.x_index],
+            )
             self.ax_vline.set_yticklabels([])
             for label in self.ax_vline.get_xticklabels():
                 label.set_rotation(270)
@@ -734,7 +848,10 @@ class InteractiveArrayPlotter:
 
             # Update the horizontal line plot
             self.ax_hline.clear()
-            self.ax_hline.plot(self.X[0], self.sliced_data[self.y_index, :])
+            self.ax_hline.plot(
+                self.X[self.y_index, :],
+                self.sliced_data[self.y_index, :],
+            )
             self.ax_hline.set_xticklabels([])
             self.ax_hline.axvline(x=event.xdata, color='gray', lw=1, ls='--')
 
@@ -745,10 +862,13 @@ class InteractiveArrayPlotter:
             self.figure.canvas.draw_idle()
 
         elif self.freeze_linecut:
-            # it does not work properly, have to invastigate why, works only on the first plot, but why?
+            frozen_y_index, frozen_x_index = self.linecut_position
             # Update the vertical line plot
             self.ax_vline.clear()
-            self.ax_vline.plot(self.sliced_data[:, self.linecut_position[0]], self.Y[:, 0])
+            self.ax_vline.plot(
+                self.sliced_data[:, frozen_x_index],
+                self.Y[:, frozen_x_index],
+            )
             self.ax_vline.set_yticklabels([])
             for label in self.ax_vline.get_xticklabels():
                 label.set_rotation(270)
@@ -756,7 +876,10 @@ class InteractiveArrayPlotter:
 
             # Update the horizontal line plot
             self.ax_hline.clear()
-            self.ax_hline.plot(self.X[0], self.sliced_data[self.linecut_position[1], :])
+            self.ax_hline.plot(
+                self.X[frozen_y_index, :],
+                self.sliced_data[frozen_y_index, :],
+            )
             self.ax_hline.set_xticklabels([])
             self.ax_hline.axvline(x=event.xdata, color='gray', lw=1, ls='--')
 
@@ -769,7 +892,7 @@ class InteractiveArrayPlotter:
     def on_key_press(self, event):
         if event.key == 's':
             self.freeze_linecut = not self.freeze_linecut
-            self.linecut_position = (self.x_index, self.y_index)
+            self.linecut_position = (self.y_index, self.x_index)
         else:
             pass
 
@@ -1128,9 +1251,9 @@ class InteractiveArrayPlotter:
         self.data_axis_transform_naming_frame.pack(side=tk.LEFT)
         self.data_axis_transform_scaling_frame.pack(side=tk.RIGHT)
 
-    def make_params_viewable(self):
-        self.traces_fitter.fit_all_traces()
-        self.fit_results_dict = self.traces_fitter.fit_results_dict
+    def make_params_viewable(self, fit_results_dict):
+        """Expose completed batch-fit parameters as selectable map channels."""
+        self.fit_results_dict = fit_results_dict
         # Update the global data_combobox with parameter names from fit_results_dict
         current_values = list(self.data_combobox['values'])
         for param in self.fit_results_dict.keys():
@@ -1140,10 +1263,12 @@ class InteractiveArrayPlotter:
 
     def fit_traces(self):
 
-        self.traces_fitter = TracesFitter(self.data, self.root)
+        self.traces_fitter = TracesFitter(
+            self.data,
+            self.root,
+            on_fit_all_complete=self.make_params_viewable,
+        )
         self.traces_fitter.create_widgets()
-        run_btn = ttk.Button(self.traces_fitter.model_frame, text="Run on all Traces", command=self.make_params_viewable)
-        run_btn.grid(row=3, column=1, columnspan=2, pady=5, padx=5)
         self.traces_fitter.update_plot()
 
     def open_fft_trace_correction_window(self):
@@ -2349,13 +2474,171 @@ class InteractiveTimeTraceMapPlotter(InteractiveArrayPlotter):
         super().__init__(root, hdf5data)
 
 
-import re
+class FitConfigurationPanel:
+    """Shared model-expression and parameter editor for all 1D fitting UIs."""
+
+    def __init__(self, parent, expression=DEFAULT_FIT_EXPRESSION):
+        self.frame = ttk.LabelFrame(parent, text='Fit Model')
+        self.model_expr_var = tk.StringVar(value=expression)
+        self.maxfev_var = tk.IntVar(value=DEFAULT_MAXFEV)
+        self.parameter_vars = {}
+        self._parameter_value_cache = {}
+
+        ttk.Label(self.frame, text='Model Expression:').grid(
+            row=0, column=0, sticky=tk.W, padx=5, pady=5
+        )
+        ttk.Entry(
+            self.frame,
+            textvariable=self.model_expr_var,
+            width=42,
+        ).grid(row=0, column=1, sticky=tk.EW, padx=5, pady=5)
+        ttk.Label(
+            self.frame,
+            text=f'Example: {FIT_EXPRESSION_EXAMPLE}',
+            wraplength=440,
+        ).grid(row=1, column=0, columnspan=2, sticky=tk.W, padx=5)
+
+        self.parameter_frame = ttk.LabelFrame(
+            self.frame,
+            text='Initial Parameters',
+        )
+        self.parameter_frame.grid(
+            row=2,
+            column=0,
+            columnspan=2,
+            sticky=tk.NSEW,
+            padx=5,
+            pady=10,
+        )
+
+        self.validation_variable = tk.StringVar()
+        ttk.Label(
+            self.frame,
+            textvariable=self.validation_variable,
+            bootstyle='danger',
+            wraplength=440,
+        ).grid(row=3, column=0, columnspan=2, sticky=tk.W, padx=5)
+
+        ttk.Label(
+            self.frame,
+            text='Max Function Evaluations (maxfev):',
+        ).grid(row=4, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Entry(
+            self.frame,
+            textvariable=self.maxfev_var,
+            width=10,
+        ).grid(row=4, column=1, sticky=tk.W, padx=5, pady=5)
+
+        self.results_text = ttk.Text(
+            self.frame,
+            height=9,
+            width=44,
+            wrap=tk.WORD,
+        )
+        self.results_text.grid(
+            row=5,
+            column=0,
+            columnspan=2,
+            sticky=tk.NSEW,
+            padx=5,
+            pady=5,
+        )
+        self.results_text.config(state=tk.DISABLED)
+        self.frame.columnconfigure(1, weight=1)
+        self.frame.rowconfigure(5, weight=1)
+
+        self.model_expr_var.trace_add('write', self._rebuild_parameter_inputs)
+        self._rebuild_parameter_inputs()
+
+    def _rebuild_parameter_inputs(self, *_args):
+        previous_values = {}
+        for name, variable in self.parameter_vars.items():
+            try:
+                previous_values[name] = variable.get()
+            except tk.TclError:
+                pass
+        self._parameter_value_cache.update(previous_values)
+
+        for widget in self.parameter_frame.winfo_children():
+            widget.destroy()
+        self.parameter_vars = {}
+
+        try:
+            model_definition = FitModelDefinition(self.model_expr_var.get())
+        except ValueError as error:
+            self.validation_variable.set(str(error))
+            return
+
+        self.validation_variable.set('')
+        for index, parameter_name in enumerate(model_definition.parameter_names):
+            initial_value = previous_values.get(
+                parameter_name,
+                self._parameter_value_cache.get(
+                    parameter_name,
+                    default_initial_value(parameter_name),
+                ),
+            )
+            variable = tk.DoubleVar(value=initial_value)
+            self.parameter_vars[parameter_name] = variable
+            ttk.Label(
+                self.parameter_frame,
+                text=f'{parameter_name}:',
+            ).grid(row=index, column=0, sticky=tk.W, padx=5, pady=3)
+            ttk.Entry(
+                self.parameter_frame,
+                textvariable=variable,
+                width=14,
+            ).grid(row=index, column=1, sticky=tk.W, padx=5, pady=3)
+
+    def get_fit_setup(self):
+        model_definition = FitModelDefinition(self.model_expr_var.get())
+        initial_values = {}
+        for parameter_name in model_definition.parameter_names:
+            variable = self.parameter_vars.get(parameter_name)
+            if variable is None:
+                raise ValueError(
+                    f'No initial-value input exists for {parameter_name!r}.'
+                )
+            try:
+                initial_values[parameter_name] = variable.get()
+            except tk.TclError as error:
+                raise ValueError(
+                    f'Enter a numeric initial value for {parameter_name!r}.'
+                ) from error
+        try:
+            maxfev = self.maxfev_var.get()
+        except tk.TclError as error:
+            raise ValueError('maxfev must be a positive integer.') from error
+        if maxfev <= 0:
+            raise ValueError('maxfev must be a positive integer.')
+        return model_definition, initial_values, maxfev
+
+    def show_result(self, result, elapsed_seconds=None, additional_lines=None):
+        text = format_fit_result(result, elapsed_seconds)
+        if additional_lines:
+            text += '\n' + '\n'.join(additional_lines)
+        self.show_text(text)
+
+    def show_text(self, text):
+        self.results_text.config(state=tk.NORMAL)
+        self.results_text.delete(1.0, tk.END)
+        self.results_text.insert(tk.END, text)
+        self.results_text.config(state=tk.DISABLED)
+
+    def use_fitted_values_as_initial(self, result):
+        for name, value in result.parameters.items():
+            variable = self.parameter_vars.get(name)
+            if variable is not None:
+                variable.set(value)
+            self._parameter_value_cache[name] = value
+
+
 class TracesFitter:
     """
     A GUI application for fitting peak functions/distributions to 1D traces
     """
 
-    def __init__(self, data, master=None):
+    def __init__(self, data, master=None, on_fit_all_complete=None):
 
         # Initialize trace indices
         self.trace_index_x = 0
@@ -2373,12 +2656,8 @@ class TracesFitter:
 
 
         self.data = data
-
-        # Define available models
-        self.models = {
-            'G': [gaussian, ('x', 'a', 'mu', 'sigma')],
-            'L': [lorentzian, ('x', 'a', 'x0', 'gamma', 'c')]
-        }
+        self.on_fit_all_complete = on_fit_all_complete
+        self.fit_all_running = False
 
         self.fitted_params = [] # Store fitted parameters
         self.fit_results = [] # Store fit results
@@ -2392,157 +2671,86 @@ class TracesFitter:
 
     def create_widgets(self):
         """Create all GUI widgets for the fitter interface."""
-        # Create main frame for layout
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Create frame for plot
         plot_frame = ttk.Frame(main_frame)
         plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Create canvas for matplotlib figure
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
         self.canvas_widget = self.canvas.get_tk_widget()
         self.canvas_widget.pack(fill=tk.BOTH, expand=True)
 
-        # Add toolbar
         toolbar_frame = ttk.Frame(plot_frame)
         toolbar_frame.pack(fill=tk.X, expand=True)
         toolbar = NavigationToolbar2Tk(self.canvas, toolbar_frame)
         toolbar.update()
 
-        # Create model definition frame
         self.model_frame = ttk.Frame(main_frame, width=200)
         self.model_frame.pack(side=tk.RIGHT, fill=tk.BOTH, padx=5, expand=True)
+        self.fit_panel = FitConfigurationPanel(self.model_frame)
+        self.fit_panel.frame.grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky=tk.NSEW,
+            padx=5,
+            pady=5,
+        )
 
-        # Add fit results text box
-        self.fit_results_text = ttk.Text(self.model_frame, height=10, width=30, wrap=tk.WORD)
-        self.fit_results_text.grid(row=7, column=0, columnspan=2, sticky=tk.NSEW, padx=5, pady=5)
-        self.fit_results_text.config(state=tk.DISABLED)
-
-        # Model expression input
-        ttk.Label(self.model_frame, text="Model Expression:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        self.model_expr_var = tk.StringVar(value="a*x + b + G1(x)")  # Default is a linear model
-        model_expr_entry = ttk.Entry(self.model_frame, textvariable=self.model_expr_var, width=30)
-        model_expr_entry.grid(row=0, column=1, padx=5, pady=5)
-
-        # Example label
-        ttk.Label(self.model_frame, text="Example: a*np.exp(-x/b) + c + L1(x)").grid(row=1, column=0, columnspan=2, sticky=tk.W,
-                                                                        padx=5)
-
-        # Parameter frame
-        param_frame = ttk.LabelFrame(self.model_frame, text="Initial Parameters")
-        param_frame.grid(row=2, column=0, columnspan=2, sticky=tk.NSEW, padx=5, pady=10)
-
-        # Default parameters (a and b for linear model)
-        self.param_vars = {}
-        param_entries = {}
-
-        self.dist_vars = {}
-        dist_entries = {}
-
-        # Initial parameters for default linear model
-        self.param_vars['a'] = tk.DoubleVar(value=1.0)
-        self.param_vars['b'] = tk.DoubleVar(value=0.0)
-
-        # Add entries for default parameters
-        ttk.Label(param_frame, text="a:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        param_entries['a'] = ttk.Entry(param_frame, textvariable=self.param_vars['a'], width=10)
-        param_entries['a'].grid(row=0, column=1, padx=5, pady=5)
-
-        ttk.Label(param_frame, text="b:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        param_entries['b'] = ttk.Entry(param_frame, textvariable=self.param_vars['b'], width=10)
-        param_entries['b'].grid(row=1, column=1, padx=5, pady=5)
-
-        # Add maxfev entry
-        self.maxfev_var = tk.IntVar(value=2200)
-        ttk.Label(self.model_frame, text="Max Function Evaluations (maxfev):").grid(row=6, column=0, sticky=tk.W, padx=5, pady=5)
-        maxfev_entry = ttk.Entry(self.model_frame, textvariable=self.maxfev_var, width=10)
-        maxfev_entry.grid(row=6, column=1, padx=5, pady=5)
-
-
-        # Add spinboxes for selecting trace indices
-        ttk.Label(self.model_frame, text="Trace X Index:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(self.model_frame, text='Trace X Index:').grid(
+            row=1, column=0, sticky=tk.W, padx=5, pady=5
+        )
         self.trace_x_index_var = tk.IntVar(value=0)
-        trace_x_spinbox = ttk.Spinbox(self.model_frame, from_=0, to=self.data.measure_dim[0]-1, textvariable=self.trace_x_index_var, width=10)
-        trace_x_spinbox.grid(row=4, column=1, padx=5, pady=5)
-        trace_x_spinbox.bind("<FocusOut>", lambda e: self.update_plot())
-        trace_x_spinbox.bind("<Return>", lambda e: self.update_plot())
+        trace_x_spinbox = ttk.Spinbox(
+            self.model_frame,
+            from_=0,
+            to=self.data.measure_dim[0] - 1,
+            textvariable=self.trace_x_index_var,
+            width=10,
+        )
+        trace_x_spinbox.grid(row=1, column=1, sticky=tk.W, padx=5, pady=5)
+        trace_x_spinbox.bind('<FocusOut>', lambda _event: self.update_plot())
+        trace_x_spinbox.bind('<Return>', lambda _event: self.update_plot())
 
-        ttk.Label(self.model_frame, text="Trace Y Index:").grid(row=5, column=0, sticky=tk.W, padx=5, pady=5)
+        ttk.Label(self.model_frame, text='Trace Y Index:').grid(
+            row=2, column=0, sticky=tk.W, padx=5, pady=5
+        )
         self.trace_y_index_var = tk.IntVar(value=0)
-        trace_y_spinbox = ttk.Spinbox(self.model_frame, from_=0, to=self.data.measure_dim[1]-1, textvariable=self.trace_y_index_var, width=10)
-        trace_y_spinbox.grid(row=5, column=1, padx=5, pady=5)
-        trace_y_spinbox.bind("<FocusOut>", lambda e: self.update_plot())
-        trace_y_spinbox.bind("<Return>", lambda e: self.update_plot())
+        trace_y_spinbox = ttk.Spinbox(
+            self.model_frame,
+            from_=0,
+            to=self.data.measure_dim[1] - 1,
+            textvariable=self.trace_y_index_var,
+            width=10,
+        )
+        trace_y_spinbox.grid(row=2, column=1, sticky=tk.W, padx=5, pady=5)
+        trace_y_spinbox.bind('<FocusOut>', lambda _event: self.update_plot())
+        trace_y_spinbox.bind('<Return>', lambda _event: self.update_plot())
 
-        # Ensure the window is sized correctly before adding dynamic content
+        button_frame = ttk.Frame(self.model_frame)
+        button_frame.grid(
+            row=3,
+            column=0,
+            columnspan=2,
+            sticky=tk.EW,
+            padx=5,
+            pady=5,
+        )
+        ttk.Button(
+            button_frame,
+            text='Fit Preview',
+            command=self.fit_preview_trace,
+        ).pack(side=tk.LEFT, padx=5)
+        self.fit_all_button = ttk.Button(
+            button_frame,
+            text='Run on all Traces',
+            command=self.fit_all_traces,
+        )
+        self.fit_all_button.pack(side=tk.LEFT, padx=5)
+
         self.root.update()
         self.root.minsize(self.root.winfo_width(), self.root.winfo_height())
-
-        # Function to update parameters when the model expression changes
-        def update_params(*args):
-            # Clear existing parameter entries
-            for widget in param_frame.winfo_children():
-                widget.destroy()
-
-            # Extract parameter names from the expression
-            expr = self.model_expr_var.get()
-            params = set()
-            dists = set()
-
-
-            for match in re.finditer(r'\b([a-zA-Z](?!\w*\())\b', expr): # Match standalone variable names not followed by '('
-                param = match.group(1)
-                if param not in {'x', 'np', 'co', 'sp', 'L', 'G'}:  # Skip x variable, numpy, and L/G
-                    params.add(param)
-            for match in re.finditer(r"([LG]\d+)", expr):
-                dist = match.group(1)
-                dists.add(dist)
-
-            # Create entries for each parameter
-            self.param_vars.clear()
-            param_entries.clear()
-            self.dist_vars.clear()
-            dist_entries.clear()
-
-            # Create separate frames for parameters and distributions
-            param_subframe = ttk.Frame(param_frame)
-            param_subframe.grid(row=0, column=0, columnspan=2, sticky=tk.NSEW)
-
-            dist_subframe = ttk.Frame(param_frame)
-            dist_subframe.grid(row=1, column=0, columnspan=2, sticky=tk.NSEW)
-
-            # Clear and populate parameter entries
-            for widget in param_subframe.winfo_children():
-                widget.destroy()
-            for i, param in enumerate(sorted(params)):
-                self.param_vars[param] = tk.DoubleVar(value=1.0)
-                ttk.Label(param_subframe, text=f"{param}:").grid(row=i, column=0, sticky=tk.W, padx=5, pady=5)
-                param_entries[param] = ttk.Entry(param_subframe, textvariable=self.param_vars[param], width=10)
-                param_entries[param].grid(row=i, column=1, padx=5, pady=5)
-
-            # Clear and populate distribution entries
-            for widget in dist_subframe.winfo_children():
-                widget.destroy()
-            for i, dist in enumerate(sorted(dists)):
-                dist_params = self.models[dist[0]][1]
-                self.dist_vars[dist] = [tk.DoubleVar(value=1.0) for _ in dist_params[1:]]  # Skip 'x' variable
-
-                ttk.Label(dist_subframe, text=f"{dist}: ").grid(row=i, column=0, sticky=tk.W, padx=5, pady=5)
-                for j, param in enumerate(dist_params[1:]):
-                    ttk.Label(dist_subframe, text=f"{param}:").grid(row=i, column=2*j+1, sticky=tk.W, padx=5, pady=5)
-
-                dist_entries[param] = [ttk.Entry(dist_subframe, textvariable=self.dist_vars[dist][j], width=10).grid(row=i, column=2*j+2, padx=5, pady=5) for j, param in enumerate(dist_params[1:])]
-
-
-        # Bind the model expression entry to update parameters
-        self.model_expr_var.trace_add("write", update_params)
-
-
-        # Add fit buttons
-        preview_btn = ttk.Button(self.model_frame, text="Fit Preview", command=self.fit_preview_trace)
-        preview_btn.grid(row=3, column=0, columnspan=2, pady=5, padx=5)
 
     def get_one_index(self, trace_index_x, trace_index_y): # Convert 2D indices to 1D index
         return self.data.measure_dim[1] * trace_index_x + trace_index_y
@@ -2558,110 +2766,88 @@ class TracesFitter:
 
         self.ax.clear() # Clear previous plot
         self.ax.plot(self.times, self.trace_selected, label='Original Trace', color='blue')
-        if hasattr(self, 'fit_y'):
+        if (
+            hasattr(self, 'fit_y')
+            and getattr(self, 'fit_trace_index', None) == self.trace_index
+        ):
             self.ax.plot(self.x_data, self.fit_y, label='Fitted Curve', color='red', linestyle='--')
+        self.ax.legend()
         self.canvas.draw()
 
     def fit_preview_trace(self):
-        """
-        Fit the currently selected trace and display the results.
-        """
+        """Fit the selected trace through the shared fitting implementation."""
+        try:
+            model_definition, initial_values, maxfev = (
+                self.fit_panel.get_fit_setup()
+            )
+            start_time = time.perf_counter()
+            result = model_definition.fit(
+                self.times,
+                self.trace_selected,
+                initial_values,
+                maxfev=maxfev,
+            )
+            elapsed = time.perf_counter() - start_time
+        except Exception as error:
+            messagebox.showerror(
+                'Fit Error',
+                f'Could not fit the preview trace:\n{error}',
+                parent=self.root,
+            )
+            return None
 
-        import time
-        start_time = time.perf_counter()
-        # Get the model expression and parameter values
-        expr = self.model_expr_var.get()
-        params = {param: var.get() for param, var in self.param_vars.items()}
-        dist_params = {dist: [var.get() for var in vars_list] for dist, vars_list in self.dist_vars.items()}
+        self.fit_definition = model_definition
+        self.fit_preview_result = result
+        self.all_param_names = list(result.parameter_names)
+        self.fit_params = result.parameters
+        self.maxfev = maxfev
+        self.x_data = np.asarray(self.times, dtype=float)
+        self.y_data = np.asarray(self.trace_selected, dtype=float)
+        self.fit_y = result.fitted_y
+        self.fit_trace_index = self.trace_index
+        self.fit_panel.use_fitted_values_as_initial(result)
 
-        # Create the model function
-        # Order of arguments: x, params, [G1a, G1mu, G1sigma], [L1a, L1x0, L1gamma, L1c], ...
-        def model_func(x, *args):
-            # Map args to parameter names in the order used for curve_fit
-            param_names = list(params.keys())
-            dist_param_names = []
-            for dist in sorted(dist_params.keys()):
-                dist_param_names.extend([f"{dist}_{param}" for param in self.models[dist[0]][1][1:]])
-            all_param_names = param_names + dist_param_names
-
-            # Build param_dict from args
-            param_dict = {name: value for name, value in zip(all_param_names, args)}
-            param_dict['x'] = x
-            param_dict['np'] = np
-            param_dict['co'] = co
-
-            # Add distribution functions (L1, G1, etc.) as callables to param_dict, using fit parameters
-            for dist in sorted(dist_params.keys()):
-                dist_func = self.models[dist[0]][0]
-                dist_param_names_local = self.models[dist[0]][1][1:]  # skip 'x'
-                dist_values = [param_dict[f"{dist}_{param}"] for param in dist_param_names_local]
-                param_dict[dist] = (lambda dist_func=dist_func, dist_values=dist_values: lambda x: dist_func(x, *dist_values))()
-
-            return eval(expr, {"__builtins__": {}}, param_dict)
-
-        self.model_func = model_func  # Store the model function for later use
-
-        # Build parameter name list in the exact order used for curve_fit
-        param_names = list(params.keys())
-        dist_param_names = []
-        for dist in sorted(dist_params.keys()):
-            dist_param_names.extend([f"{dist}_{param}" for param in self.models[dist[0]][1][1:]])
-        self.all_param_names = param_names + dist_param_names
-
-        # Initial parameter values
-        p0 = [params[param] for param in param_names]
-        for dist in sorted(dist_params.keys()):
-            p0.extend(dist_params[dist])
-
-        # Fit the model
-        self.x_data, self.y_data = self.times, self.trace_selected
-        self.maxfev = self.maxfev_var.get()
-        popt, pcov = optimize.curve_fit(model_func, self.x_data, self.y_data, p0=p0, maxfev=self.maxfev)
-        end_time = time.perf_counter()
-        elapsed = end_time - start_time
-
-        # Fit results
-        self.fit_params = {param: val for param, val in zip(self.all_param_names, popt)}
-
-        # Generate fitted curve
-        self.fit_y = model_func(self.x_data, *popt)
-
-        # Add the fitted curve
-        self.update_plot()
-        self.canvas.draw()
-
-        # Show the fitted parameters in the persistent text box
-        result_text = "Fitted parameters:\n"
-        for param, value in self.fit_params.items():
-            result_text += f"{param} = {value:.6g}\n"
-        result_text += f"\nFit time for preview trace: {elapsed:.3f} seconds\n"
-
-        # Estimate total time for all traces if possible
-        num_traces = self.data.trace_reference.shape[2]
+        num_traces = int(self.data.trace_reference.shape[2])
         total_estimate = elapsed * num_traces
-        result_text += f"Estimated time for all traces: {total_estimate:.1f} seconds ({total_estimate/60:.1f} min)\n"
-        self.fit_results_text.config(state=tk.NORMAL)
-        self.fit_results_text.delete(1.0, tk.END)
-        self.fit_results_text.insert(tk.END, result_text)
-        self.fit_results_text.config(state=tk.DISABLED)
+        self.fit_panel.show_result(
+            result,
+            elapsed_seconds=elapsed,
+            additional_lines=[
+                '',
+                f'Estimated time for all traces: {total_estimate:.1f} seconds '
+                f'({total_estimate / 60:.1f} min)',
+            ],
+        )
+        self.update_plot()
+        return result
 
     def fit_all_traces(self):
         """
         Fit the model to all traces and store the results.
         """
+        if self.fit_all_running:
+            messagebox.showinfo(
+                'Trace Fit in Progress',
+                'Please wait for the current batch fit to finish.',
+                parent=self.root,
+            )
+            return None
 
-        # 1) Ensure model function + parameter order exist (and preview fit works)
-        self.fit_preview_trace()
+        preview_result = self.fit_preview_trace()
+        if preview_result is None:
+            return None
 
-        # 2) Determine sizes
         trace_ref = self.data.trace_reference
         try:
             num_traces = int(trace_ref.shape[2])
-        except Exception as e:
-            raise RuntimeError(
-                "trace_reference must be indexable and have shape like (trace_len, 1, num_traces). "
-                f"Got shape={getattr(trace_ref, 'shape', None)}"
-            ) from e
+        except Exception as error:
+            messagebox.showerror(
+                'Fit Error',
+                'Trace data must have shape (trace_length, 1, trace_count). '
+                f'Got {getattr(trace_ref, "shape", None)}.\n{error}',
+                parent=self.root,
+            )
+            return None
 
         n_params = len(self.all_param_names)
         fit_results = np.full((num_traces, n_params), np.nan, dtype=float)
@@ -2687,15 +2873,17 @@ class TracesFitter:
 
         cancel_btn = ttk.Button(progress_win, text="Cancel", command=on_cancel)
         cancel_btn.pack(padx=20, pady=(0, 15), anchor="e")
+        progress_win.protocol('WM_DELETE_WINDOW', on_cancel)
 
-        # 4) Worker -> UI communication
         msg_q: "queue.Queue[tuple]" = queue.Queue()
 
-        # Warm-start p0 from the preview fit params (stable order via self.all_param_names)
-        p0 = np.array([self.fit_params[name] for name in self.all_param_names], dtype=float)
+        p0 = np.asarray(preview_result.parameter_values, dtype=float)
+        model_definition = self.fit_definition
+        maxfev = self.maxfev
+        failed_fit_count = 0
 
         def worker():
-            nonlocal p0
+            nonlocal p0, failed_fit_count
             try:
                 x_data = np.asarray(self.times, dtype=float)
 
@@ -2704,29 +2892,25 @@ class TracesFitter:
                         msg_q.put(("done", "Cancelled."))
                         return
 
-                    # Load the *current* trace (THIS is what makes it iterate over all traces)
                     try:
                         y_data = np.asarray(trace_ref[:, 0, i], dtype=float)
                     except Exception:
-                        # Fallback if layout differs; try a simpler indexing (you can customize if needed)
                         y_data = np.asarray(trace_ref[i], dtype=float).reshape(-1)
 
                     try:
-                        popt, _pcov = optimize.curve_fit(
-                            self.model_func,
+                        result = model_definition.fit(
                             x_data,
                             y_data,
-                            p0=p0,
-                            maxfev=int(self.maxfev)
+                            p0,
+                            maxfev=maxfev,
                         )
-                        fit_results[i, :] = popt
-                        p0 = popt  # warm-start next fit
+                        fit_results[i, :] = result.parameter_values
+                        p0 = result.parameter_values
 
                     except Exception as fit_err:
-                        # Keep NaNs for this trace and continue
+                        failed_fit_count += 1
                         msg_q.put(("warn", f"Fit failed for trace {i + 1}/{num_traces}: {fit_err}"))
 
-                    # Throttle UI updates (too-frequent updates can slow things down)
                     if (i % 5 == 0) or (i == num_traces - 1):
                         msg_q.put(("progress", i + 1))
 
@@ -2747,12 +2931,20 @@ class TracesFitter:
                         # Keep GUI responsive; warnings go to console
                         print(payload)
                     elif kind == "error":
-                        print(payload)
-                        progress_label_var.set("Error (see console).")
+                        self.fit_all_running = False
+                        self.fit_all_button.config(state=tk.NORMAL)
+                        progress_label_var.set('Fit failed.')
                         cancel_btn.config(state=tk.DISABLED)
+                        messagebox.showerror(
+                            'Trace Fitting Failed',
+                            payload,
+                            parent=progress_win,
+                        )
                         progress_win.after(800, progress_win.destroy)
                         return
                     elif kind == "done":
+                        self.fit_all_running = False
+                        self.fit_all_button.config(state=tk.NORMAL)
                         progress_label_var.set(payload)
                         cancel_btn.config(state=tk.DISABLED)
 
@@ -2762,6 +2954,20 @@ class TracesFitter:
                             name: self.fit_results[:, idx]
                             for idx, name in enumerate(self.all_param_names)
                         }
+                        successful_fit_count = int(np.count_nonzero(
+                            np.all(np.isfinite(self.fit_results), axis=1)
+                        ))
+                        self.fit_panel.show_result(
+                            preview_result,
+                            additional_lines=[
+                                '',
+                                f'Batch result: {successful_fit_count}/{num_traces} '
+                                'traces fitted successfully.',
+                                f'Failed fits: {failed_fit_count}',
+                            ],
+                        )
+                        if self.on_fit_all_complete is not None:
+                            self.on_fit_all_complete(self.fit_results_dict)
 
                         progress_win.after(500, progress_win.destroy)
                         return
@@ -2771,6 +2977,8 @@ class TracesFitter:
             progress_win.after(50, poll)
 
         # 5) Start
+        self.fit_all_running = True
+        self.fit_all_button.config(state=tk.DISABLED)
         threading.Thread(target=worker, daemon=True).start()
         poll()
         return None
@@ -3018,130 +3226,69 @@ class UtilityLinePlotter:
                    command=dialog.destroy).pack(side=tk.LEFT, padx=10)
 
     def open_fit_custom_model(self):
-        """Open a dialog to define and fit a custom model to the selected line."""
+        """Fit the selected line with the same editor used for trace fitting."""
         if self.selected_line_idx is None or self.selected_line_idx >= len(self.data):
-            messagebox.showinfo("No Selection", "Please select a line to fit.")
+            messagebox.showinfo(
+                'No Selection',
+                'Please select a line to fit.',
+                parent=self.root,
+            )
             return
 
-        # Create a new dialog window
         dialog = ttk.Toplevel(self.root)
-        dialog.title("Fit Custom Model")
-        dialog.geometry("400x350")
+        dialog.title('Fit Line Cut')
+        dialog.geometry('560x650')
+        dialog.transient(self.root)
 
-        # Get the selected data
         x_data, y_data, label = self.data[self.selected_line_idx]
+        fit_panel = FitConfigurationPanel(dialog)
+        fit_panel.frame.pack(
+            fill=tk.BOTH,
+            expand=True,
+            padx=10,
+            pady=10,
+        )
 
-        # Create the model definition frame
-        model_frame = ttk.LabelFrame(dialog, text="Custom Model Definition")
-        model_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        # Model expression input
-        ttk.Label(model_frame, text="Model Expression:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        model_expr_var = tk.StringVar(value="a*x + b")  # Default is a linear model
-        model_expr_entry = ttk.Entry(model_frame, textvariable=model_expr_var, width=30)
-        model_expr_entry.grid(row=0, column=1, padx=5, pady=5)
-
-        ttk.Label(model_frame, text="Example: a*np.exp(-x/b) + c").grid(row=1, column=0, columnspan=2, sticky=tk.W,
-                                                                        padx=5)
-
-        # Parameter frame
-        param_frame = ttk.LabelFrame(model_frame, text="Initial Parameters")
-        param_frame.grid(row=2, column=0, columnspan=2, sticky=tk.NSEW, padx=5, pady=10)
-
-        # Default parameters (a and b for linear model)
-        param_vars = {}
-        param_entries = {}
-
-        # Initial parameters for default linear model
-        param_vars['a'] = tk.DoubleVar(value=1.0)
-        param_vars['b'] = tk.DoubleVar(value=0.0)
-
-        ttk.Label(param_frame, text="a:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        param_entries['a'] = ttk.Entry(param_frame, textvariable=param_vars['a'], width=10)
-        param_entries['a'].grid(row=0, column=1, padx=5, pady=5)
-
-        ttk.Label(param_frame, text="b:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        param_entries['b'] = ttk.Entry(param_frame, textvariable=param_vars['b'], width=10)
-        param_entries['b'].grid(row=1, column=1, padx=5, pady=5)
-
-        # Function to update parameters when the model expression changes
-        def update_params(*args):
-            # Clear existing parameter entries
-            for widget in param_frame.winfo_children():
-                widget.destroy()
-
-            # Extract parameter names from the expression
-            expr = model_expr_var.get()
-            params = set()
-            import re
-            for match in re.finditer(r'\b([a-zA-Z](?!\w*\())\b', expr):
-                param = match.group(1)
-                if param != 'x' and param != 'np' and param != 'co' and param != 'sp':  # Skip x variable and numpy
-                    params.add(param)
-
-            # Create entries for each parameter
-            param_vars.clear()
-            param_entries.clear()
-            for i, param in enumerate(sorted(params)):
-                param_vars[param] = tk.DoubleVar(value=1.0)
-                ttk.Label(param_frame, text=f"{param}:").grid(row=i, column=0, sticky=tk.W, padx=5, pady=5)
-                param_entries[param] = ttk.Entry(param_frame, textvariable=param_vars[param], width=10)
-                param_entries[param].grid(row=i, column=1, padx=5, pady=5)
-
-        # Bind the model expression entry to update parameters
-        model_expr_var.trace("w", update_params)
-
-        # Buttons frame
         button_frame = ttk.Frame(dialog)
-        button_frame.pack(fill=tk.X, pady=10)
+        button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
 
         def fit_model():
             try:
-                # Get the model expression and parameter values
-                expr = model_expr_var.get()
-                params = {param: var.get() for param, var in param_vars.items()}
+                model_definition, initial_values, maxfev = (
+                    fit_panel.get_fit_setup()
+                )
+                start_time = time.perf_counter()
+                result = model_definition.fit(
+                    x_data,
+                    y_data,
+                    initial_values,
+                    maxfev=maxfev,
+                )
+                elapsed = time.perf_counter() - start_time
+            except Exception as error:
+                messagebox.showerror(
+                    'Fit Error',
+                    f'Could not fit the selected line:\n{error}',
+                    parent=dialog,
+                )
+                return
 
-                # Create the model function
-                def model_func(x, *args):
-                    # Create a namespace with parameters assigned to their values
-                    param_dict = {name: value for name, value in zip(params.keys(), args)}
-                    # Add x to the namespace
-                    param_dict['x'] = x
-                    # Add numpy functions
-                    param_dict['np'] = np
-                    #  Add scipy.constants
-                    param_dict['co'] = co
-                    # Evaluate the expression
-                    return eval(expr, {"__builtins__": {}}, param_dict)
+            self.add_linecut(x_data, result.fitted_y, f'Fit: {label}')
+            fit_panel.use_fitted_values_as_initial(result)
+            fit_panel.show_result(result, elapsed_seconds=elapsed)
 
-                # Initial parameter values
-                p0 = [params[param] for param in sorted(params.keys())]
-
-                # Fit the model
-                from scipy import optimize
-                popt, pcov = optimize.curve_fit(model_func, x_data, y_data, p0=p0)
-
-                # Fit results
-                fit_params = {param: val for param, val in zip(sorted(params.keys()), popt)}
-
-                # Generate fitted curve
-                fit_y = model_func(x_data, *popt)
-
-                # Add the fitted curve as a new linecut
-                self.add_linecut(x_data, fit_y, f"Fit: {label}")
-
-                # Show the fitted parameters
-                result_text = "Fitted parameters:\n"
-                for param, value in fit_params.items():
-                    result_text += f"{param} = {value:.6g}\n"
-                messagebox.showinfo("Fit Results", result_text)
-
-
-            except Exception as e:
-                messagebox.showerror("Fit Error", f"Error fitting model: {str(e)}")
-
-        ttk.Button(button_frame, text="Fit", command=fit_model).pack(side=tk.LEFT, padx=10)
-        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT, padx=10)
+        ttk.Button(
+            button_frame,
+            text='Fit Selected Line',
+            command=fit_model,
+            bootstyle='success',
+        ).pack(side=tk.LEFT, padx=10)
+        ttk.Button(
+            button_frame,
+            text='Close',
+            command=dialog.destroy,
+            bootstyle='secondary',
+        ).pack(side=tk.RIGHT, padx=10)
 
     def open_export_window(self):
         """Open a dialog to export the selected line trace as text or numpy file."""

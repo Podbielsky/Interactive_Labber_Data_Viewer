@@ -47,6 +47,7 @@ LABBER_APPLICATION_FILES=(
     "creating_hdf5_files_from_npy_files.py"
     "HDF5Data.py"
     "interactive_plotting_tools.py"
+    "fitting_tools.py"
     "Data_analysis_and_transforms.py"
     "custom_cmap.py"
     "gamma_map.py"
