@@ -76,7 +76,63 @@ def skewed_gaussian_func_shape(x, x0, sigma, alpha):
     gauss_dis = 1/np.sqrt(2*np.pi) * np.exp(-z**2/2)
     return 2 / sigma * gauss_dis * gauss_cum
 
-def extract_linecut(x, y, z, start_point, end_point):
+def get_linecut_pixel_normal(x, y, start_point, end_point):
+    """Return a data-coordinate vector perpendicular to a line and one pixel long."""
+    x_array = np.asarray(x, dtype=float)
+    y_array = np.asarray(y, dtype=float)
+    if x_array.ndim != 2 or y_array.ndim != 2 or x_array.shape != y_array.shape:
+        raise ValueError('X and Y must be matching two-dimensional coordinate grids.')
+
+    def median_grid_step(axis):
+        x_difference = np.diff(x_array, axis=axis).ravel()
+        y_difference = np.diff(y_array, axis=axis).ravel()
+        valid = np.isfinite(x_difference) & np.isfinite(y_difference)
+        if not np.any(valid):
+            return np.zeros(2, dtype=float)
+        vectors = np.column_stack((x_difference[valid], y_difference[valid]))
+        vectors = vectors[np.linalg.norm(vectors, axis=1) > 0]
+        if vectors.size == 0:
+            return np.zeros(2, dtype=float)
+        return np.nanmedian(vectors, axis=0)
+
+    column_step = median_grid_step(axis=1)
+    row_step = median_grid_step(axis=0)
+    grid_basis = np.column_stack((column_step, row_step))
+    line_direction = np.subtract(end_point, start_point, dtype=float)
+    if not np.all(np.isfinite(line_direction)) or np.linalg.norm(line_direction) == 0:
+        return np.zeros(2, dtype=float)
+
+    if np.linalg.matrix_rank(grid_basis) == 2:
+        index_direction = np.linalg.solve(grid_basis, line_direction)
+        index_length = np.linalg.norm(index_direction)
+        if np.isfinite(index_length) and index_length > 0:
+            index_direction /= index_length
+            index_normal = np.array([-index_direction[1], index_direction[0]])
+            return grid_basis @ index_normal
+
+    # Degenerate grids, including a one-row NPZ map with a dummy Y axis, do
+    # not provide two independent grid directions. Use the typical available
+    # neighbor spacing to construct a stable visual/extraction normal.
+    points = np.column_stack((x_array.ravel(), y_array.ravel()))
+    points = points[np.all(np.isfinite(points), axis=1)]
+    spacing = np.nan
+    if len(points) > 1:
+        distances, _ = KDTree(points).query(points, k=2)
+        positive_distances = distances[:, 1]
+        positive_distances = positive_distances[
+            np.isfinite(positive_distances) & (positive_distances > 0)
+        ]
+        if positive_distances.size:
+            spacing = np.nanmedian(positive_distances)
+    if not np.isfinite(spacing) or spacing <= 0:
+        spacing = 1.0
+
+    line_direction /= np.linalg.norm(line_direction)
+    return spacing * np.array([-line_direction[1], line_direction[0]])
+
+
+def extract_linecut(x, y, z, start_point, end_point, offset_pixels=0.0,
+                    num_points=None):
     """
     Extract values from an irregular 2D dataset along a line between two points.
 
@@ -98,45 +154,84 @@ def extract_linecut(x, y, z, start_point, end_point):
     numpy array
         Z values extracted along the line cut
     """
-    # Ensure inputs are numpy arrays and flatten if needed
-    x = np.asarray(x).flatten()
-    y = np.asarray(y).flatten()
-    z = np.asarray(z).flatten()
+    x_grid = np.asarray(x, dtype=float)
+    y_grid = np.asarray(y, dtype=float)
+    z_grid = np.asarray(z)
+    if x_grid.ndim != 2 or y_grid.ndim != 2 or z_grid.ndim != 2:
+        raise ValueError('X, Y, and Z must all be two-dimensional arrays.')
+    if x_grid.shape != y_grid.shape or x_grid.shape != z_grid.shape:
+        raise ValueError(
+            'X, Y, and Z must have matching shapes; got '
+            f'{x_grid.shape}, {y_grid.shape}, and {z_grid.shape}.'
+        )
+
+    x_values = x_grid.ravel()
+    y_values = y_grid.ravel()
+    z_values = z_grid.ravel()
+    valid = np.isfinite(x_values) & np.isfinite(y_values) & np.isfinite(z_values)
+    points = np.column_stack((x_values[valid], y_values[valid]))
+    values = z_values[valid]
+    if len(points) == 0:
+        raise ValueError('The map does not contain finite coordinates and data values.')
 
     # Extract start and end points
-    x0, y0 = start_point
-    x1, y1 = end_point
+    start = np.asarray(start_point, dtype=float)
+    end = np.asarray(end_point, dtype=float)
+    if start.shape != (2,) or end.shape != (2,):
+        raise ValueError('Linecut endpoints must each contain an X and Y value.')
+    if not np.all(np.isfinite(start)) or not np.all(np.isfinite(end)):
+        raise ValueError('Linecut endpoints must be finite numeric values.')
+
+    normal = get_linecut_pixel_normal(x_grid, y_grid, start, end)
+    offset = normal * float(offset_pixels)
+    shifted_start = start + offset
+    shifted_end = end + offset
 
     # Calculate the Euclidean distance between the start and end points
-    total_distance = np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2)
+    total_distance = np.linalg.norm(end - start)
+    if total_distance == 0:
+        raise ValueError('The linecut endpoints must not be identical.')
 
     # Estimate the average grid spacing based on nearest neighbor distances
-    if len(x) > 1:
-        points = np.column_stack((x, y))
-        # Calculate distances between each point and its nearest neighbor
-        tree = KDTree(points)
-        distances, _ = tree.query(points, k=2)  # Find self and nearest neighbor
-        avg_grid_spacing = np.mean(distances[:, 1])  # placeholder
-    else:
+    if num_points is None:
         avg_grid_spacing = 1.0
+        if len(points) > 1:
+            # Calculate distances between each point and its nearest neighbor
+            tree = KDTree(points)
+            distances, _ = tree.query(points, k=2)  # Find self and nearest neighbor
+            nearest_distances = distances[:, 1]
+            nearest_distances = nearest_distances[
+                np.isfinite(nearest_distances) & (nearest_distances > 0)
+            ]
+            if nearest_distances.size:
+                avg_grid_spacing = np.nanmedian(nearest_distances)
 
     # Determine number of points based on the line length and grid spacing
-    num_points = int(total_distance / avg_grid_spacing) + 1
-    num_points = max(num_points, 2)  # Ensure at least 2 points
+    if num_points is None:
+        num_points = int(total_distance / avg_grid_spacing) + 1
+    num_points = max(int(num_points), 2)  # Ensure at least 2 points
 
     # Create points along the line
     t = np.linspace(0, 1, num_points)
-    x_line = x0 + t * (x1 - x0)
-    y_line = y0 + t * (y1 - y0)
+    line_points = shifted_start + t[:, np.newaxis] * (shifted_end - shifted_start)
 
-    # Use griddata to interpolate z values at the line points
-    points = np.column_stack((x, y))
-    line_points = np.column_stack((x_line, y_line))
+    # Linear interpolation preserves the previous behavior. Degenerate grids
+    # cannot form a 2D triangulation, and points near a wide cut may lie just
+    # outside the convex hull, so fill those samples with nearest neighbors.
+    try:
+        sampled_values = interpolate.griddata(
+            points, values, line_points, method='linear'
+        )
+    except (RuntimeError, ValueError):
+        sampled_values = np.full(num_points, np.nan)
+    sampled_values = np.asarray(sampled_values)
+    missing = ~np.isfinite(sampled_values)
+    if np.any(missing):
+        sampled_values[missing] = interpolate.griddata(
+            points, values, line_points[missing], method='nearest'
+        )
 
-    # Interpolate using cubic b-splines
-    z_values = interpolate.griddata(points, z, line_points, method='linear')
-
-    return z_values
+    return sampled_values
 
 
 def image_down_sampling(imag, x, y, res_fac=(0.5, 0.5)):
@@ -826,5 +921,3 @@ def gamma(t_list):
         gamma_s = float("NaN")
 
     return gamma, gamma_s
-
-

@@ -25,6 +25,7 @@ from scipy.signal import savgol_filter
 from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data, two_d_ifft_on_data, evaluate_poly_background_2d,
                                           correct_median_diff, correct_mean_of_lines, gradient_5p_stencil,
                                           subtract_trace_average, cut_data_range, extract_linecut,
+                                          get_linecut_pixel_normal,
                                           skewed_gaussian_func_shape, beta_func_shape, trace_wise_min_max_scaling)
 from gamma_map import (get_t_rates, get_fourier, fft_correction_select, fft_correction_apply, get_cuts)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap, make_half_red_map, make_half_blue_map
@@ -357,6 +358,7 @@ class InteractiveArrayPlotter:
         self.relation_parameter_entry_list = []
         self.roi_cut_entry_list = []
         self.drawn_lines_list = []
+        self.linecut_settings_list = []
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.root)
         self.toolbar = NavigationToolbar2Tk(self.canvas, root, pack_toolbar=False)
         self.toolbar.update()
@@ -1988,7 +1990,10 @@ class InteractiveArrayPlotter:
 
     def reset_lines(self):
         self.drawn_lines_list = []
+        self.linecut_settings_list = []
         self.update_lines_listbox()
+        self.redraw_saved_lines()
+        self.canvas.draw_idle()
 
     def setup_line_editing(self):
         """Set up the line editing functionality with right-click context menu"""
@@ -2002,6 +2007,7 @@ class InteractiveArrayPlotter:
         self.lines_context_menu = ttk.Menu(self.lines_listbox, tearoff=0)
         self.lines_context_menu.add_command(label="Edit Line", command=self.start_line_editing)
         self.lines_context_menu.add_command(label="Extract Line", command=self.extract_and_plot_linecut)
+        self.lines_context_menu.add_command(label="Open Menu", command=self.open_linecut_settings_window)
         self.lines_context_menu.add_command(label="Delete Line", command=self.delete_selected_line)
 
         # Bind right-click event to show context menu
@@ -2010,8 +2016,192 @@ class InteractiveArrayPlotter:
         # Also bind double-click as a quick way to edit a line
         self.lines_listbox.bind("<Double-Button-1>", lambda event: self.start_line_editing())
 
+    @staticmethod
+    def _default_linecut_settings():
+        return {
+            'width_pixels': 1,
+            'use_average': False,
+            'extract_multiple': False,
+            'number_of_linecuts': 3,
+            'orthogonal': False,
+        }
+
+    def _get_linecut_settings(self, line_index):
+        while len(self.linecut_settings_list) <= line_index:
+            self.linecut_settings_list.append(self._default_linecut_settings())
+        return self.linecut_settings_list[line_index]
+
+    def open_linecut_settings_window(self):
+        """Open extraction and geometry settings for the selected drawn line."""
+        selected_indices = self.lines_listbox.curselection()
+        if not selected_indices:
+            messagebox.showinfo("No Selection", "Please select a line to configure.")
+            return
+
+        selected_index = selected_indices[0]
+        if selected_index >= len(self.drawn_lines_list):
+            messagebox.showinfo("Invalid Selection", "The selected line no longer exists.")
+            return
+
+        self.linecut_settings_index = selected_index
+        settings = self._get_linecut_settings(selected_index)
+        if (hasattr(self, 'linecut_settings_window') and
+                self.linecut_settings_window.winfo_exists()):
+            self.linecut_settings_window.destroy()
+
+        self.linecut_settings_window = ttk.Toplevel(self.root)
+        self.linecut_settings_window.title(f"Linecut Settings - Line {selected_index + 1}")
+        self.linecut_settings_window.geometry("430x310")
+        self.linecut_settings_window.resizable(False, False)
+        self.linecut_settings_window.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            self.linecut_settings_window,
+            text="Linecut width (pixels):"
+        ).grid(row=0, column=0, padx=10, pady=8, sticky=tk.W)
+        self.linecut_width_var = tk.StringVar(value=str(settings['width_pixels']))
+        ttk.Entry(
+            self.linecut_settings_window,
+            textvariable=self.linecut_width_var,
+            width=10
+        ).grid(row=0, column=1, padx=10, pady=8, sticky=tk.W)
+
+        self.linecut_average_var = tk.BooleanVar(value=settings['use_average'])
+        self._add_linecut_boolean_row(
+            row=1,
+            label="Use average:",
+            variable=self.linecut_average_var,
+        )
+        self.linecut_multiple_var = tk.BooleanVar(value=settings['extract_multiple'])
+        self._add_linecut_boolean_row(
+            row=2,
+            label="Extract multiple:",
+            variable=self.linecut_multiple_var,
+        )
+
+        ttk.Label(
+            self.linecut_settings_window,
+            text="Number of linecuts (N):"
+        ).grid(row=3, column=0, padx=10, pady=8, sticky=tk.W)
+        self.linecut_count_var = tk.StringVar(value=str(settings['number_of_linecuts']))
+        ttk.Entry(
+            self.linecut_settings_window,
+            textvariable=self.linecut_count_var,
+            width=10
+        ).grid(row=3, column=1, padx=10, pady=8, sticky=tk.W)
+
+        self.linecut_orthogonal_var = tk.BooleanVar(value=settings['orthogonal'])
+        self._add_linecut_boolean_row(
+            row=4,
+            label="Orthogonal cut:",
+            variable=self.linecut_orthogonal_var,
+        )
+
+        ttk.Label(
+            self.linecut_settings_window,
+            text=("Average returns one profile across the selected width.\n"
+                  "Extract multiple returns N parallel profiles within that width."),
+            justify=tk.LEFT,
+        ).grid(row=5, column=0, columnspan=2, padx=10, pady=8, sticky=tk.W)
+
+        ttk.Button(
+            self.linecut_settings_window,
+            text="Apply",
+            command=self.apply_linecut_settings,
+            bootstyle='primary',
+        ).grid(row=6, column=0, columnspan=2, pady=10)
+
+    def _add_linecut_boolean_row(self, row, label, variable):
+        ttk.Label(self.linecut_settings_window, text=label).grid(
+            row=row, column=0, padx=10, pady=8, sticky=tk.W
+        )
+        choice_frame = ttk.Frame(self.linecut_settings_window)
+        choice_frame.grid(row=row, column=1, padx=10, pady=8, sticky=tk.W)
+        ttk.Radiobutton(
+            choice_frame, text="Off", variable=variable, value=False
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Radiobutton(
+            choice_frame, text="On", variable=variable, value=True
+        ).pack(side=tk.LEFT)
+
+    def apply_linecut_settings(self):
+        """Validate and save settings for the selected drawn line."""
+        try:
+            width_pixels = int(self.linecut_width_var.get())
+            number_of_linecuts = int(self.linecut_count_var.get())
+        except ValueError:
+            messagebox.showerror(
+                "Invalid Linecut Settings",
+                "Width and number of linecuts must be whole numbers."
+            )
+            return
+        if width_pixels < 1 or number_of_linecuts < 1:
+            messagebox.showerror(
+                "Invalid Linecut Settings",
+                "Width and number of linecuts must both be at least 1."
+            )
+            return
+
+        line_index = self.linecut_settings_index
+        settings = self._get_linecut_settings(line_index)
+        settings.update({
+            'width_pixels': width_pixels,
+            'use_average': bool(self.linecut_average_var.get()),
+            'extract_multiple': bool(self.linecut_multiple_var.get()),
+            'number_of_linecuts': number_of_linecuts,
+            'orthogonal': bool(self.linecut_orthogonal_var.get()),
+        })
+        if settings['orthogonal']:
+            start_point, end_point = self.drawn_lines_list[line_index]
+            self.drawn_lines_list[line_index] = list(
+                self._orthogonalize_line(start_point, end_point)
+            )
+
+        self.update_lines_listbox()
+        self.redraw_saved_lines()
+        self.canvas.draw_idle()
+        self.linecut_settings_window.destroy()
+
+    def _orthogonalize_line(self, start_point, end_point):
+        """Lock a line to its visually dominant horizontal or vertical axis."""
+        start_display = self.ax.transData.transform(start_point)
+        end_display = self.ax.transData.transform(end_point)
+        display_delta = np.abs(end_display - start_display)
+        if display_delta[0] >= display_delta[1]:
+            constrained_end = (end_point[0], start_point[1])
+        else:
+            constrained_end = (start_point[0], end_point[1])
+        return tuple(start_point), constrained_end
+
+    @staticmethod
+    def _linecut_extraction_offsets(settings):
+        """Return average, multiple, and de-duplicated extraction offsets."""
+        average_offsets = np.array([], dtype=float)
+        multiple_offsets = np.array([], dtype=float)
+        if settings['use_average']:
+            width = settings['width_pixels']
+            average_offsets = np.arange(width, dtype=float) - (width - 1) / 2
+        if settings['extract_multiple']:
+            count = settings['number_of_linecuts']
+            if count == 1:
+                multiple_offsets = np.array([0.0])
+            else:
+                half_width = settings['width_pixels'] / 2
+                multiple_offsets = np.linspace(-half_width, half_width, count)
+        if not settings['use_average'] and not settings['extract_multiple']:
+            multiple_offsets = np.array([0.0])
+
+        unique_offsets = []
+        seen_offsets = set()
+        for offset in np.concatenate((average_offsets, multiple_offsets)):
+            key = round(float(offset), 12)
+            if key not in seen_offsets:
+                seen_offsets.add(key)
+                unique_offsets.append(float(offset))
+        return average_offsets, multiple_offsets, unique_offsets
+
     def extract_and_plot_linecut(self):
-        """Extract line cut data and display in a UtilityLinePlotter."""
+        """Extract linecut profiles in a worker and report determinate progress."""
         selected_indices = self.lines_listbox.curselection()
         if not selected_indices:
             messagebox.showinfo("No Selection", "Please select a line to edit.")
@@ -2021,35 +2211,187 @@ class InteractiveArrayPlotter:
         if selected_index >= len(self.drawn_lines_list):
             messagebox.showinfo("Invalid Selection", "The selected line no longer exists.")
             return
+        if getattr(self, 'linecut_extraction_running', False):
+            messagebox.showinfo(
+                "Linecut Extraction",
+                "Another linecut extraction is already running."
+            )
+            return
 
         self.editing_line_index = selected_index
-
-        if (not hasattr(self, 'linecut_plotter') or
-                not hasattr(self.linecut_plotter, 'root')):
-            # Create a new plotter
-            self.linecut_plotter = UtilityLinePlotter(self.root)
-
-            # Set up protocol for window close using the root window
-            self.linecut_plotter.root.protocol("WM_DELETE_WINDOW", self.on_linecut_window_close)
-
         line = self.drawn_lines_list[self.editing_line_index]
-        start_point, end_point = line
+        start_point = tuple(line[0])
+        end_point = tuple(line[1])
+        settings = dict(self._get_linecut_settings(selected_index))
+        average_offsets, multiple_offsets, unique_offsets = (
+            self._linecut_extraction_offsets(settings)
+        )
+        total_profiles = len(unique_offsets)
 
-        # Extract the line cut using the extract_linecut function
-        linecut_result = extract_linecut(self.X, self.Y, self.sliced_data, start_point, end_point)
+        # Copy map state before entering the worker so it cannot observe a map
+        # transformation or undo operation performed during extraction.
+        x_grid = np.array(self.X, copy=True)
+        y_grid = np.array(self.Y, copy=True)
+        data_grid = np.array(self.sliced_data, copy=True)
 
-        # Create distance array (x-axis) for the line cut plot
-        x0, y0 = start_point
-        x1, y1 = end_point
-        total_distance = np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2)
-        num_points = len(linecut_result)
-        distance = np.linspace(0, total_distance, num_points)
+        progress_window = ttk.Toplevel(self.root)
+        progress_window.title("Linecut Extraction")
+        progress_window.geometry("460x150")
+        progress_window.transient(self.root)
+        progress_label_var = tk.StringVar(
+            value=f"Preparing {total_profiles} profile(s)…"
+        )
+        ttk.Label(
+            progress_window,
+            textvariable=progress_label_var,
+        ).pack(padx=20, pady=(15, 6), anchor=tk.W)
+        progress_var = tk.DoubleVar(value=0)
+        progress_bar = ttk.Progressbar(
+            progress_window,
+            variable=progress_var,
+            maximum=total_profiles,
+            length=400,
+        )
+        progress_bar.pack(padx=20, pady=8, fill=tk.X)
 
-        # Generate a label for the line cut
-        line_label = f"Line {len(self.linecut_plotter.data) + 1} )"
+        cancel_event = threading.Event()
 
-        # Add the line cut to the plotter
-        self.linecut_plotter.add_linecut(distance, linecut_result, label=line_label)
+        def cancel_extraction():
+            cancel_event.set()
+            progress_label_var.set("Cancelling after the current profile…")
+            cancel_button.config(state=tk.DISABLED)
+
+        cancel_button = ttk.Button(
+            progress_window,
+            text="Cancel",
+            command=cancel_extraction,
+        )
+        cancel_button.pack(padx=20, pady=(0, 15), anchor=tk.E)
+        progress_window.protocol('WM_DELETE_WINDOW', cancel_extraction)
+
+        message_queue = queue.Queue()
+        self.linecut_extraction_running = True
+
+        def worker():
+            try:
+                profiles_by_offset = {}
+                num_points = None
+                for completed, offset in enumerate(unique_offsets, start=1):
+                    if cancel_event.is_set():
+                        message_queue.put(("cancelled", None))
+                        return
+                    profile = extract_linecut(
+                        x_grid,
+                        y_grid,
+                        data_grid,
+                        start_point,
+                        end_point,
+                        offset_pixels=offset,
+                        num_points=num_points,
+                    )
+                    if num_points is None:
+                        num_points = len(profile)
+                    profiles_by_offset[round(float(offset), 12)] = profile
+                    message_queue.put(("progress", completed))
+
+                if cancel_event.is_set():
+                    message_queue.put(("cancelled", None))
+                    return
+
+                extracted_profiles = []
+                if settings['use_average']:
+                    average_profiles = [
+                        profiles_by_offset[round(float(offset), 12)]
+                        for offset in average_offsets
+                    ]
+                    average_profile = np.nanmean(
+                        np.stack(average_profiles), axis=0
+                    )
+                    extracted_profiles.append((
+                        average_profile,
+                        (f"Line {selected_index + 1} average "
+                         f"({settings['width_pixels']} px)"),
+                    ))
+
+                if settings['extract_multiple']:
+                    count = settings['number_of_linecuts']
+                    for profile_index, offset in enumerate(
+                            multiple_offsets, start=1):
+                        extracted_profiles.append((
+                            profiles_by_offset[round(float(offset), 12)],
+                            (f"Line {selected_index + 1} cut "
+                             f"{profile_index}/{count} ({offset:+.2f} px)"),
+                        ))
+
+                if not settings['use_average'] and not settings['extract_multiple']:
+                    extracted_profiles.append((
+                        profiles_by_offset[round(float(unique_offsets[0]), 12)],
+                        f"Line {selected_index + 1}",
+                    ))
+
+                total_distance = np.linalg.norm(
+                    np.subtract(end_point, start_point, dtype=float)
+                )
+                distance = np.linspace(0, total_distance, num_points)
+                message_queue.put((
+                    "done", (distance, extracted_profiles)
+                ))
+            except Exception as error:
+                message_queue.put(("error", str(error)))
+
+        def finish_progress_window(delay=0):
+            self.linecut_extraction_running = False
+            if progress_window.winfo_exists():
+                progress_window.after(delay, progress_window.destroy)
+
+        def poll_worker():
+            try:
+                while True:
+                    message_type, payload = message_queue.get_nowait()
+                    if message_type == "progress":
+                        progress_var.set(payload)
+                        progress_label_var.set(
+                            f"Extracting profiles… {payload}/{total_profiles}"
+                        )
+                    elif message_type == "cancelled":
+                        progress_label_var.set("Extraction cancelled.")
+                        finish_progress_window(delay=300)
+                        return
+                    elif message_type == "error":
+                        progress_label_var.set("Extraction failed.")
+                        cancel_button.config(state=tk.DISABLED)
+                        messagebox.showerror(
+                            "Linecut Extraction Failed",
+                            payload,
+                            parent=progress_window,
+                        )
+                        finish_progress_window(delay=300)
+                        return
+                    elif message_type == "done":
+                        distance, extracted_profiles = payload
+                        progress_var.set(total_profiles)
+                        progress_label_var.set("Extraction complete.")
+                        cancel_button.config(state=tk.DISABLED)
+                        if (not hasattr(self, 'linecut_plotter') or
+                                not hasattr(self.linecut_plotter, 'root') or
+                                not self.linecut_plotter.root.winfo_exists()):
+                            self.linecut_plotter = UtilityLinePlotter(self.root)
+                            self.linecut_plotter.root.protocol(
+                                "WM_DELETE_WINDOW", self.on_linecut_window_close
+                            )
+                        for profile, label in extracted_profiles:
+                            self.linecut_plotter.add_linecut(
+                                distance, profile, label=label
+                            )
+                        finish_progress_window(delay=300)
+                        return
+            except queue.Empty:
+                pass
+            if progress_window.winfo_exists():
+                progress_window.after(50, poll_worker)
+
+        threading.Thread(target=worker, daemon=True).start()
+        poll_worker()
 
     def show_lines_context_menu(self, event):
         """Show the context menu on right-click in the lines listbox"""
@@ -2205,11 +2547,19 @@ class InteractiveArrayPlotter:
 
         # Update the appropriate endpoint
         if self.editing_point == 0:  # Start point
-            self.drawn_lines_list[self.editing_line_index] = [(event.xdata, event.ydata), end_point]
-            self.edit_markers[0].set_data([event.xdata], [event.ydata])
+            new_start = (event.xdata, event.ydata)
+            settings = self._get_linecut_settings(self.editing_line_index)
+            if settings['orthogonal']:
+                _, new_start = self._orthogonalize_line(end_point, new_start)
+            self.drawn_lines_list[self.editing_line_index] = [new_start, end_point]
+            self.edit_markers[0].set_data([new_start[0]], [new_start[1]])
         else:  # End point
-            self.drawn_lines_list[self.editing_line_index] = [start_point, (event.xdata, event.ydata)]
-            self.edit_markers[1].set_data([event.xdata], [event.ydata])
+            new_end = (event.xdata, event.ydata)
+            settings = self._get_linecut_settings(self.editing_line_index)
+            if settings['orthogonal']:
+                _, new_end = self._orthogonalize_line(start_point, new_end)
+            self.drawn_lines_list[self.editing_line_index] = [start_point, new_end]
+            self.edit_markers[1].set_data([new_end[0]], [new_end[1]])
 
         # Update the line drawing
         self.redraw_saved_lines()
@@ -2289,8 +2639,8 @@ class InteractiveArrayPlotter:
 
         # Remove the line from our list
         self.drawn_lines_list.pop(selected_index)
-
-
+        if selected_index < len(self.linecut_settings_list):
+            self.linecut_settings_list.pop(selected_index)
 
         # Update the listbox and redraw
         self.update_lines_listbox()
@@ -2318,23 +2668,53 @@ class InteractiveArrayPlotter:
             start_point, end_point = line
             x_values = [start_point[0], end_point[0]]
             y_values = [start_point[1], end_point[1]]
+            settings = self._get_linecut_settings(i)
 
             # Highlight the selected line if in editing mode
             if self.editing_line and i == self.editing_line_index:
-                line_artist, = self.ax.plot(x_values, y_values, color='purple',
-                                            linewidth=2, zorder=6)
+                line_color = 'purple'
+                line_width = 2
+                line_zorder = 6
             else:
-                line_artist, = self.ax.plot(x_values, y_values, color='red',
-                                            linewidth=1, zorder=5)
+                line_color = 'red'
+                line_width = 1
+                line_zorder = 5
+
+            line_artist, = self.ax.plot(
+                x_values,
+                y_values,
+                color=line_color,
+                linewidth=line_width,
+                zorder=line_zorder,
+            )
 
             self.line_artists.append(line_artist)
+
+            pixel_normal = get_linecut_pixel_normal(
+                self.X, self.Y, start_point, end_point
+            )
+            half_width_vector = pixel_normal * settings['width_pixels'] / 2
+            for endpoint in (np.asarray(start_point), np.asarray(end_point)):
+                whisker_start = endpoint - half_width_vector
+                whisker_end = endpoint + half_width_vector
+                whisker, = self.ax.plot(
+                    [whisker_start[0], whisker_end[0]],
+                    [whisker_start[1], whisker_end[1]],
+                    color=line_color,
+                    linewidth=line_width,
+                    zorder=line_zorder,
+                )
+                self.line_artists.append(whisker)
 
     def update_lines_listbox(self):
         self.lines_listbox.delete(0, tk.END)  # Clear the current contents of the listbox
         for i, line in enumerate(self.drawn_lines_list, start=1):
             # Assuming each line is a tuple of start and end points like ((x1, y1), (x2, y2))
             start_point, end_point = np.round(line, 4)
-            line_str = f"Line {i}: Start {start_point} End {end_point}"
+            width = self._get_linecut_settings(i - 1)['width_pixels']
+            line_str = (
+                f"Line {i}: Start {start_point} End {end_point} Width {width} px"
+            )
             self.lines_listbox.insert(tk.END, line_str)
 
     def on_canvas_click(self, event):
@@ -2354,7 +2734,12 @@ class InteractiveArrayPlotter:
             # Update the final point of the line
             self.current_line[1] = (event.xdata, event.ydata)
             self.drawn_lines_list.append(self.current_line)
+            self.linecut_settings_list.append(self._default_linecut_settings())
+            if self.current_line_artist in self.ax.lines:
+                self.current_line_artist.remove()
+            self.current_line_artist = None
             self.update_lines_listbox()
+            self.redraw_saved_lines()
             self.current_line = None  # Reset for the next line
             self.canvas.draw_idle()
 
@@ -2467,6 +2852,7 @@ class InteractiveArrayPlotter:
         self.xlim, self.ylim = None, None
         self.relation_parameter_entry_list = []
         self.drawn_lines_list = []
+        self.linecut_settings_list = []
 
         # Redraw the canvas to reflect the reset state
         self.canvas.draw_idle()
