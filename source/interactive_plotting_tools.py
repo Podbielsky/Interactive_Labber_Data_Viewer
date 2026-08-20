@@ -3,6 +3,8 @@ import os
 import threading
 import queue
 import tkinter as tk
+from collections import deque
+from contextlib import contextmanager
 from tkinter import messagebox
 from tkinter import filedialog
 import ttkbootstrap as ttk
@@ -197,6 +199,7 @@ class InteractiveArrayPlotter:
         self.loaded = False # rename to be more discriptiv
         self.calculated = False
         self.auto_scale_factor = 2.5
+        self.data_operation_history = deque(maxlen=5)
 
         #ROI attributes
         self.roi_mode = False
@@ -216,6 +219,13 @@ class InteractiveArrayPlotter:
 
         # Create File Menu
         self.file_menu = ttk.Menu(self.menubar, tearoff=0)
+        self.file_menu.add_command(
+            label="Undo",
+            command=self.undo_last_data_operation,
+            state=tk.DISABLED
+        )
+        self.undo_menu_index = self.file_menu.index('end')
+        self.file_menu.add_separator()
         self.file_menu.add_command(label="Save whole data as NumPy array", command=self.save_file)
         self.file_menu.add_command(label="Save displayed data as NumPy array", command=self.save_data)
         self.file_menu.add_separator()
@@ -381,6 +391,102 @@ class InteractiveArrayPlotter:
         self.plot_data()
         self.canvas.mpl_connect('key_press_event', self.on_key_press)
 
+    def _capture_displayed_data_state(self, operation_name):
+        """Return an independent snapshot of the currently displayed data."""
+        if any(getattr(self, name, None) is None for name in ('X', 'Y', 'sliced_data')):
+            return None
+
+        return {
+            'operation': operation_name,
+            'X': np.array(self.X, copy=True),
+            'Y': np.array(self.Y, copy=True),
+            'sliced_data': np.array(self.sliced_data, copy=True),
+            'nan_mask': np.array(getattr(self, 'nan_mask', []), copy=True),
+            'name_data_x_axis': self.name_data_x_axis,
+            'name_data_y_axis': self.name_data_y_axis,
+            'name_data_z': self.name_data_z,
+            'xlim': tuple(self.xlim) if getattr(self, 'xlim', None) is not None else None,
+            'ylim': tuple(self.ylim) if getattr(self, 'ylim', None) is not None else None,
+            'vmin': getattr(self, 'vmin', None),
+            'vmax': getattr(self, 'vmax', None),
+            'auto_scale_factor': getattr(self, 'auto_scale_factor', None),
+        }
+
+    @contextmanager
+    def data_operation(self, operation_name):
+        """Save the pre-operation array state after an operation succeeds."""
+        state = self._capture_displayed_data_state(operation_name)
+        try:
+            yield
+        except Exception:
+            raise
+        else:
+            if state is not None:
+                self.data_operation_history.append(state)
+                self._update_undo_menu_state()
+
+    def _update_undo_menu_state(self):
+        """Enable Undo only when a displayed-data snapshot is available."""
+        if not hasattr(self, 'file_menu') or not hasattr(self, 'undo_menu_index'):
+            return
+
+        if self.data_operation_history:
+            operation_name = self.data_operation_history[-1]['operation']
+            self.file_menu.entryconfigure(
+                self.undo_menu_index,
+                label=f"Undo {operation_name}",
+                state=tk.NORMAL
+            )
+        else:
+            self.file_menu.entryconfigure(
+                self.undo_menu_index,
+                label="Undo",
+                state=tk.DISABLED
+            )
+
+    def undo_last_data_operation(self):
+        """Restore and remove the newest displayed-data snapshot."""
+        if not self.data_operation_history:
+            self._update_undo_menu_state()
+            return
+
+        state = self.data_operation_history.pop()
+        self.X = np.array(state['X'], copy=True)
+        self.Y = np.array(state['Y'], copy=True)
+        self.sliced_data = np.array(state['sliced_data'], copy=True)
+        self.nan_mask = np.array(state['nan_mask'], copy=True)
+        self.name_data_x_axis = state['name_data_x_axis']
+        self.name_data_y_axis = state['name_data_y_axis']
+        self.name_data_z = state['name_data_z']
+        self.xlim = state['xlim']
+        self.ylim = state['ylim']
+        self.vmin = state['vmin']
+        self.vmax = state['vmax']
+        self.auto_scale_factor = state['auto_scale_factor']
+        self.invert_enabled = False
+
+        row_count, column_count = self.sliced_data.shape[:2]
+        self.x_index = min(self.x_index, column_count - 1)
+        self.y_index = min(self.y_index, row_count - 1)
+        if hasattr(self, 'trace_x_index'):
+            self.trace_x_index = min(self.trace_x_index, column_count - 1)
+        if hasattr(self, 'trace_y_index'):
+            self.trace_y_index = min(self.trace_y_index, row_count - 1)
+
+        self._update_undo_menu_state()
+        self.update_histogramm()
+        self.update_pcolormesh(self.vmin, self.vmax)
+        self._after_data_operation_undo()
+
+    def _after_data_operation_undo(self):
+        """Hook for plotters with additional views tied to the 2-D map."""
+        pass
+
+    def clear_data_operation_history(self):
+        """Discard snapshots belonging to a previously displayed source array."""
+        self.data_operation_history.clear()
+        self._update_undo_menu_state()
+
 
     def plot_data(self):
         tick = time.perf_counter()
@@ -542,6 +648,7 @@ class InteractiveArrayPlotter:
             self.refresh_crosshair()
 
         self.update_histogramm()
+        self.clear_data_operation_history()
         tock = time.perf_counter()
         print(f'Plotting time: {tock - tick} s')
 
@@ -1063,7 +1170,7 @@ class InteractiveArrayPlotter:
             )
             return
 
-        self.sliced_data = savgol_filter(
+        filtered_data = savgol_filter(
             self.sliced_data,
             window_length=window_length,
             polyorder=polyorder,
@@ -1072,8 +1179,10 @@ class InteractiveArrayPlotter:
             mode='interp'
         )
 
-        if self.auto_scale_var.get():
-            self.apply_auto_scaling()
+        with self.data_operation('Savitzky-Golay filter'):
+            self.sliced_data = filtered_data
+            if self.auto_scale_var.get():
+                self.apply_auto_scaling()
 
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
@@ -1282,7 +1391,10 @@ class InteractiveArrayPlotter:
         self.fft_filter_sliced_data_cut = self.apply_fft_mask(self.fft_filter_sliced_data)
 
         self.fft_filter_sliced_data_preview = two_d_ifft_on_data(self.fft_filter_sliced_data_cut, self.fft_filter_x, self.fft_filter_y, mode='Complex')[2]
-        self.sliced_data = np.abs(self.fft_filter_sliced_data_preview)
+        filtered_data = np.abs(self.fft_filter_sliced_data_preview)
+
+        with self.data_operation('2-D FFT filter'):
+            self.sliced_data = filtered_data
 
         # remove all masks
         for i, shape in enumerate(self.shapes):
@@ -1492,23 +1604,28 @@ class InteractiveArrayPlotter:
         self.fft_filter_canvas.draw()
 
     def apply_data_axis_transform(self):
-        self.name_data_x_axis = str(self.x_axis_name_input.get())
-        self.name_data_y_axis = str(self.y_axis_name_input.get())
-        self.name_data_z = str(self.z_axis_name_input.get())
-        self.auto_scale_factor = np.float64(self.auto_scale_factor_input.get())
-
-        self.X = self.X * np.float64(self.x_axis_scale_input.get())
-        self.Y = self.Y * np.float64(self.y_axis_scale_input.get())
-        self.sliced_data = self.sliced_data * np.float64(self.z_axis_scale_input.get())
-
-        self.xlim = [np.min(self.X), np.max(self.X)]
-        self.ylim = [np.min(self.Y), np.max(self.Y)]
-
+        name_data_x_axis = str(self.x_axis_name_input.get())
+        name_data_y_axis = str(self.y_axis_name_input.get())
+        name_data_z = str(self.z_axis_name_input.get())
+        auto_scale_factor = np.float64(self.auto_scale_factor_input.get())
+        transformed_x = self.X * np.float64(self.x_axis_scale_input.get())
+        transformed_y = self.Y * np.float64(self.y_axis_scale_input.get())
+        transformed_data = self.sliced_data * np.float64(self.z_axis_scale_input.get())
         if self.use_trace_wise_min_max_scaling_var.get():
-            self.sliced_data = trace_wise_min_max_scaling(self.sliced_data)
+            transformed_data = trace_wise_min_max_scaling(transformed_data)
 
-        if self.auto_scale_var.get():
-            self.apply_auto_scaling()
+        with self.data_operation('Scale or rename axes and data'):
+            self.name_data_x_axis = name_data_x_axis
+            self.name_data_y_axis = name_data_y_axis
+            self.name_data_z = name_data_z
+            self.auto_scale_factor = auto_scale_factor
+            self.X = transformed_x
+            self.Y = transformed_y
+            self.sliced_data = transformed_data
+            self.xlim = [np.min(self.X), np.max(self.X)]
+            self.ylim = [np.min(self.Y), np.max(self.Y)]
+            if self.auto_scale_var.get():
+                self.apply_auto_scaling()
 
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
@@ -1526,9 +1643,13 @@ class InteractiveArrayPlotter:
             x = np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)]
             y = np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)]
             sliced_data = (self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)]
-            self.X, self.Y, self.sliced_data = image_down_sampling(sliced_data, x, y, (self.interpolation_entry_1.get(), self.interpolation_entry_2.get()))
-            self.xlim = [np.min(self.X), np.max(self.X)]
-            self.ylim = [np.min(self.Y), np.max(self.Y)]
+            interpolated_x, interpolated_y, interpolated_data = image_down_sampling(
+                sliced_data, x, y, (self.interpolation_entry_1.get(), self.interpolation_entry_2.get())
+            )
+            with self.data_operation('Interpolation'):
+                self.X, self.Y, self.sliced_data = interpolated_x, interpolated_y, interpolated_data
+                self.xlim = [np.min(self.X), np.max(self.X)]
+                self.ylim = [np.min(self.Y), np.max(self.Y)]
             self.update_pcolormesh(self.vmin, self.vmax)
 
     def apply_poly_bg(self):
@@ -1541,37 +1662,44 @@ class InteractiveArrayPlotter:
             bg = evaluate_poly_background_2d(self.X, self.Y, self.sliced_data, int(self.poly_order_x.get()),
                                              int(self.poly_order_y.get()))
 
-        self.sliced_data = self.sliced_data - bg
-
-        if self.auto_scale_var.get():
-            self.apply_auto_scaling()
+        corrected_data = self.sliced_data - bg
+        with self.data_operation('Polynomial background subtraction'):
+            self.sliced_data = corrected_data
+            if self.auto_scale_var.get():
+                self.apply_auto_scaling()
 
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
     def apply_median_difference(self):
-        self.sliced_data = correct_median_diff(self.sliced_data)
-        if self.auto_scale_var.get():
-            self.apply_auto_scaling()
+        corrected_data = correct_median_diff(self.sliced_data)
+        with self.data_operation('Median-difference correction'):
+            self.sliced_data = corrected_data
+            if self.auto_scale_var.get():
+                self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
     def apply_mean_of_lines(self):
-        self.sliced_data = correct_mean_of_lines(self.sliced_data)
-        if self.auto_scale_var.get():
-            self.apply_auto_scaling()
+        corrected_data = correct_mean_of_lines(self.sliced_data)
+        with self.data_operation('Mean-of-lines correction'):
+            self.sliced_data = corrected_data
+            if self.auto_scale_var.get():
+                self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
     def apply_relation_parameters(self):
-        self.sliced_data = (self.sliced_data + np.float64(self.relation_parameter_entry_list[0].get()) *
-                            self.X ** np.float64(self.relation_parameter_entry_list[1].get()) +
-                            np.float64(self.relation_parameter_entry_list[2].get()) *
-                            self.Y ** np.float64(self.relation_parameter_entry_list[3].get())
-                            + np.float64(self.relation_parameter_entry_list[4].get()))
+        corrected_data = (self.sliced_data + np.float64(self.relation_parameter_entry_list[0].get()) *
+                          self.X ** np.float64(self.relation_parameter_entry_list[1].get()) +
+                          np.float64(self.relation_parameter_entry_list[2].get()) *
+                          self.Y ** np.float64(self.relation_parameter_entry_list[3].get())
+                          + np.float64(self.relation_parameter_entry_list[4].get()))
 
-        if self.auto_scale_var.get():
-            self.apply_auto_scaling()
+        with self.data_operation('Relation-parameter correction'):
+            self.sliced_data = corrected_data
+            if self.auto_scale_var.get():
+                self.apply_auto_scaling()
 
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
@@ -1591,7 +1719,7 @@ class InteractiveArrayPlotter:
         poly_fit_order = int(self.poly_fit_order_entry.get())
 
         # Apply the `subtract_trace_average` function
-        self.sliced_data = subtract_trace_average(
+        corrected_data = subtract_trace_average(
             self.sliced_data,
             n=n,
             axis=axis,
@@ -1601,13 +1729,19 @@ class InteractiveArrayPlotter:
             filter_sigma=filter_sigma,
             poly_fit_order=poly_fit_order
         )
-        if self.auto_scale_var.get():
-            self.apply_auto_scaling()
+        with self.data_operation('Subtract trace average'):
+            self.sliced_data = corrected_data
+            if self.auto_scale_var.get():
+                self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
     def apply_gaussian_filter(self):
-        self.sliced_data = gaussian_filter(self.sliced_data, (float(self.filter_pixel_x.get()), float(self.filter_pixel_y.get())))
+        filtered_data = gaussian_filter(
+            self.sliced_data, (float(self.filter_pixel_x.get()), float(self.filter_pixel_y.get()))
+        )
+        with self.data_operation('Gaussian filter'):
+            self.sliced_data = filtered_data
         self.update_pcolormesh(self.vmin, self.vmax)
 
     def apply_derivative(self):
@@ -1615,9 +1749,13 @@ class InteractiveArrayPlotter:
         dx = np.mean((np.diff(self.X, axis=1)).flatten())
         dy = np.mean((np.diff(self.Y, axis=0)).flatten())
         # Calculate gradient
-        self.sliced_data = np.gradient(self.sliced_data, dx, dy)[self.axis_selection.index(self.derivative_combobox.get())]
-        if self.auto_scale_var.get():
-            self.apply_auto_scaling()
+        derivative_data = np.gradient(
+            self.sliced_data, dx, dy
+        )[self.axis_selection.index(self.derivative_combobox.get())]
+        with self.data_operation('Derivative'):
+            self.sliced_data = derivative_data
+            if self.auto_scale_var.get():
+                self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
@@ -1626,21 +1764,25 @@ class InteractiveArrayPlotter:
         dx = np.mean((np.diff(self.X, axis=1)).flatten())
         dy = np.mean((np.diff(self.Y, axis=0)).flatten())
         # Calculate gradient
-        self.sliced_data = np.sqrt(np.gradient(self.sliced_data, dx, dy)[0] ** 2
-                            + np.gradient(self.sliced_data, dx, dy)[1] ** 2)
-        if self.auto_scale_var.get():
-            self.apply_auto_scaling()
+        gradient_data = np.sqrt(np.gradient(self.sliced_data, dx, dy)[0] ** 2
+                                + np.gradient(self.sliced_data, dx, dy)[1] ** 2)
+        with self.data_operation('Norm of gradient'):
+            self.sliced_data = gradient_data
+            if self.auto_scale_var.get():
+                self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
     def apply_2d_fft(self):
-        self.X, self.Y, self.sliced_data = two_d_fft_on_data(self.sliced_data, self.X, self.Y, mode='Amplitude')
-        self.name_data_z = 'FFT Amp of ' + self.name_data_z
-        self.name_data_x_axis = 'freq. of ' + self.name_data_x_axis
-        self.name_data_y_axis = 'freq. of ' + self.name_data_y_axis
-        self.xlim = [np.min(self.X), np.max(self.X)]
-        self.ylim = [np.min(self.Y), np.max(self.Y)]
-        self.apply_auto_scaling()
+        fft_x, fft_y, fft_data = two_d_fft_on_data(self.sliced_data, self.X, self.Y, mode='Amplitude')
+        with self.data_operation('2-D FFT'):
+            self.X, self.Y, self.sliced_data = fft_x, fft_y, fft_data
+            self.name_data_z = 'FFT Amp of ' + self.name_data_z
+            self.name_data_x_axis = 'freq. of ' + self.name_data_x_axis
+            self.name_data_y_axis = 'freq. of ' + self.name_data_y_axis
+            self.xlim = [np.min(self.X), np.max(self.X)]
+            self.ylim = [np.min(self.Y), np.max(self.Y)]
+            self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
@@ -1655,22 +1797,17 @@ class InteractiveArrayPlotter:
                 messagebox.showerror("Invalid Range", "Min values must be less than max values")
                 return
 
-            # Store original data for potential undo
-            self.original_data = (self.X.copy(), self.Y.copy(), self.sliced_data.copy())
-
             # Apply the cut
             result = cut_data_range(self.X, self.Y, self.sliced_data, x_range, y_range)
             if result is not None:
-                self.X, self.Y, self.sliced_data = result
-
                 # Calculate new min/max if data exists
-                if len(self.sliced_data) > 0:
-
-                    if self.auto_scale_var.get():
-                        self.apply_auto_scaling()
-
-                    self.xlim = (np.min(self.X), np.max(self.X))
-                    self.ylim = (np.min(self.Y), np.max(self.Y))
+                if len(result[2]) > 0:
+                    with self.data_operation('ROI cut'):
+                        self.X, self.Y, self.sliced_data = result
+                        if self.auto_scale_var.get():
+                            self.apply_auto_scaling()
+                        self.xlim = (np.min(self.X), np.max(self.X))
+                        self.ylim = (np.min(self.Y), np.max(self.Y))
                     self.update_plot()
                     self.roi_data_cut_window.destroy()  # Close window on success
                 else:
@@ -2139,12 +2276,13 @@ class InteractiveArrayPlotter:
     def update_plot(self):
         # feature does not work as intended and leads to some weird behaviour which allows to use those bugs as a feature
         if self.invert_enabled:
-            self.X, self.Y = self.Y.T, self.X.T
-            self.sliced_data = self.sliced_data.T
-            self.name_data_x_axis, self.name_data_y_axis = self.name_data_y_axis, self.name_data_x_axis
-            self.xlim = (np.min(self.X), np.max(self.X))
-            self.ylim = (np.min(self.Y), np.max(self.Y))
-            self.toggle_invert()
+            with self.data_operation('Invert axes'):
+                self.X, self.Y = self.Y.T, self.X.T
+                self.sliced_data = self.sliced_data.T
+                self.name_data_x_axis, self.name_data_y_axis = self.name_data_y_axis, self.name_data_x_axis
+                self.xlim = (np.min(self.X), np.max(self.X))
+                self.ylim = (np.min(self.Y), np.max(self.Y))
+                self.toggle_invert()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
@@ -2174,6 +2312,8 @@ class InteractiveArrayPlotter:
     ### reset functions ###
 
     def reset(self):
+        self.clear_data_operation_history()
+
         # Clear the plot
         self.ax.clear()
         self.ax_vline.clear()
@@ -2306,6 +2446,9 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
 
     def update_plot(self):
         super().update_plot()
+        self.update_line_plot()
+
+    def _after_data_operation_undo(self):
         self.update_line_plot()
 
     def open_hist_window(self):
