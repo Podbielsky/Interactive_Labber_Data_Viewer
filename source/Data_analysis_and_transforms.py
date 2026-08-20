@@ -605,14 +605,43 @@ def cut_data_range(x_grid, y_grid, z_data, x_range, y_range):
     :return: A tuple containing the filtered x-grid, y-grid, and data array.
     :rtype: Tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]
     """
-    x_mask = (x_grid[0, :] >= x_range[0]) & (x_grid[0, :] <= x_range[1])
-    y_mask = (y_grid[:, 0] >= y_range[0]) & (y_grid[:, 0] <= y_range[1])
+    x_array = np.asarray(x_grid)
+    y_array = np.asarray(y_grid)
+    z_array = np.asarray(z_data)
+    if x_array.ndim != 2 or y_array.ndim != 2 or z_array.ndim != 2:
+        raise ValueError('X, Y, and Z must all be two-dimensional arrays.')
+    if x_array.shape != y_array.shape or x_array.shape != z_array.shape:
+        raise ValueError(
+            'X, Y, and Z must have matching shapes; got '
+            f'{x_array.shape}, {y_array.shape}, and {z_array.shape}.'
+        )
 
-    x_grid_cut = x_grid[y_mask, :][:, x_mask]
-    y_grid_cut = y_grid[y_mask, :][:, x_mask]
-    z_data_cut = z_data[y_mask, :][:, x_mask]
+    x_min, x_max = sorted(float(value) for value in x_range)
+    y_min, y_max = sorted(float(value) for value in y_range)
+    if not np.all(np.isfinite([x_min, x_max, y_min, y_max])):
+        raise ValueError('ROI limits must be finite numeric values.')
 
-    return x_grid_cut, y_grid_cut, z_data_cut
+    # NPZ input may provide curvilinear 2D grids, so determine the selected
+    # rows and columns from every coordinate pair instead of assuming that X
+    # is fully represented by its first row and Y by its first column.
+    finite_coordinates = np.isfinite(x_array) & np.isfinite(y_array)
+    inside_roi = (
+        finite_coordinates
+        & (x_array >= x_min)
+        & (x_array <= x_max)
+        & (y_array >= y_min)
+        & (y_array <= y_max)
+    )
+    selected_rows = np.flatnonzero(np.any(inside_roi, axis=1))
+    selected_columns = np.flatnonzero(np.any(inside_roi, axis=0))
+    if selected_rows.size == 0 or selected_columns.size == 0:
+        empty_slice = (slice(0, 0), slice(0, 0))
+        return x_array[empty_slice], y_array[empty_slice], z_array[empty_slice]
+
+    row_slice = slice(selected_rows[0], selected_rows[-1] + 1)
+    column_slice = slice(selected_columns[0], selected_columns[-1] + 1)
+    selection = (row_slice, column_slice)
+    return x_array[selection], y_array[selection], z_array[selection]
 
 def trace_wise_min_max_scaling(img):
     return (img - np.min(img, axis=-1, keepdims=True)) / (np.max(img, axis=-1, keepdims=True) - np.min(img, axis=-1, keepdims=True))
@@ -797,6 +826,5 @@ def gamma(t_list):
         gamma_s = float("NaN")
 
     return gamma, gamma_s
-
 
 

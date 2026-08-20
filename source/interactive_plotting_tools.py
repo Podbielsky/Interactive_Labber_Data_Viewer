@@ -1914,19 +1914,20 @@ class InteractiveArrayPlotter:
     def apply_roi_data_cut(self):
         try:
             # Convert entry values to floats
-            x_range = (float(self.roi_cut_entry_list[0].get()), float(self.roi_cut_entry_list[2].get()))
-            y_range = (float(self.roi_cut_entry_list[1].get()), float(self.roi_cut_entry_list[3].get()))
-
-            # Validate ranges
-            if x_range[0] >= x_range[1] or y_range[0] >= y_range[1]:
-                messagebox.showerror("Invalid Range", "Min values must be less than max values")
-                return
+            x_range = tuple(sorted((
+                float(self.roi_cut_entry_list[0].get()),
+                float(self.roi_cut_entry_list[2].get()),
+            )))
+            y_range = tuple(sorted((
+                float(self.roi_cut_entry_list[1].get()),
+                float(self.roi_cut_entry_list[3].get()),
+            )))
 
             # Apply the cut
             result = cut_data_range(self.X, self.Y, self.sliced_data, x_range, y_range)
             if result is not None:
                 # Calculate new min/max if data exists
-                if len(result[2]) > 0:
+                if result[2].size > 0:
                     with self.data_operation('ROI cut'):
                         self.X, self.Y, self.sliced_data = result
                         if self.auto_scale_var.get():
@@ -1936,12 +1937,15 @@ class InteractiveArrayPlotter:
                     self.update_plot()
                     self.roi_data_cut_window.destroy()  # Close window on success
                 else:
-                    messagebox.showwarning("Warning", "No data points in the selected range")
+                    messagebox.showwarning(
+                        "Empty ROI",
+                        "No coordinate points lie inside the selected range."
+                    )
             else:
                 messagebox.showerror("Error", "Failed to apply ROI cut")
 
         except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter numeric values")
+            messagebox.showerror("Invalid Input", "Please enter valid numeric ROI limits.")
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
 
