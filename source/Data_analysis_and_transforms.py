@@ -49,6 +49,41 @@ def beta_func_shape(x, a, b, scale):
     """
     return beta(a, b) * ((scale * x) ** (a - 1)) * ((1 - scale * x) ** (b - 1))
 
+
+def cumulative_integral(data, coordinate, axis):
+    """Cumulatively integrate a 2D array using local coordinate spacing."""
+    data_array = np.asarray(data)
+    coordinate_array = np.asarray(coordinate, dtype=float)
+    if data_array.ndim != 2 or coordinate_array.ndim != 2:
+        raise ValueError('Data and coordinates must both be two-dimensional.')
+    if data_array.shape != coordinate_array.shape:
+        raise ValueError(
+            'Data and coordinate arrays must have matching shapes; got '
+            f'{data_array.shape} and {coordinate_array.shape}.'
+        )
+    if axis not in (0, 1):
+        raise ValueError('Integration axis must be 0 or 1.')
+
+    lower = [slice(None), slice(None)]
+    upper = [slice(None), slice(None)]
+    lower[axis] = slice(None, -1)
+    upper[axis] = slice(1, None)
+    lower = tuple(lower)
+    upper = tuple(upper)
+
+    coordinate_spacing = coordinate_array[upper] - coordinate_array[lower]
+    trapezoids = (
+        0.5 * (data_array[upper] + data_array[lower]) * coordinate_spacing
+    )
+    cumulative_values = np.cumsum(trapezoids, axis=axis)
+    initial_shape = list(data_array.shape)
+    initial_shape[axis] = 1
+    initial_value = np.zeros(
+        initial_shape,
+        dtype=np.result_type(data_array.dtype, coordinate_array.dtype, float),
+    )
+    return np.concatenate((initial_value, cumulative_values), axis=axis)
+
 def skewed_gaussian_func_shape(x, x0, sigma, alpha):
     """
     Computes the shape of a skewed Gaussian distribution given the input `x`,

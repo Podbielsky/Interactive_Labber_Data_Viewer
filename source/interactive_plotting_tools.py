@@ -26,7 +26,8 @@ from Data_analysis_and_transforms import (image_down_sampling, two_d_fft_on_data
                                           correct_median_diff, correct_mean_of_lines, gradient_5p_stencil,
                                           subtract_trace_average, cut_data_range, extract_linecut,
                                           get_linecut_pixel_normal,
-                                          skewed_gaussian_func_shape, beta_func_shape, trace_wise_min_max_scaling)
+                                          cumulative_integral, skewed_gaussian_func_shape,
+                                          beta_func_shape, trace_wise_min_max_scaling)
 from gamma_map import (get_t_rates, get_fourier, fft_correction_select, fft_correction_apply, get_cuts)
 from custom_cmap import make_neon_cyclic_colormap, make_bi_colormap, make_half_red_map, make_half_blue_map
 from fitting_tools import (
@@ -1261,7 +1262,10 @@ class InteractiveArrayPlotter:
         self.savgol_poly_entry.pack()
         self.savgol_poly_entry.insert(0, "2")
 
-        ttk.Label(self.savitzky_golay_filter_window, text="Derivative order:").pack()
+        ttk.Label(
+            self.savitzky_golay_filter_window,
+            text="Derivative order (-1 = coordinate-weighted integral):"
+        ).pack()
         self.savgol_deriv_entry = ttk.Entry(self.savitzky_golay_filter_window)
         self.savgol_deriv_entry.pack()
         self.savgol_deriv_entry.insert(0, "0")
@@ -1277,9 +1281,23 @@ class InteractiveArrayPlotter:
         axis_name = self.savgol_axis_combobox.get()
         axis = self.savgol_axis_selection.index(axis_name)
 
-        window_length = int(self.savgol_window_entry.get())
-        polyorder = int(self.savgol_poly_entry.get())
-        deriv = int(self.savgol_deriv_entry.get())
+        try:
+            window_length = int(self.savgol_window_entry.get())
+            polyorder = int(self.savgol_poly_entry.get())
+            deriv = int(self.savgol_deriv_entry.get())
+        except ValueError:
+            messagebox.showerror(
+                "Invalid Savitzky-Golay settings",
+                "Window length, polynomial order, and derivative order must be integers."
+            )
+            return
+
+        if deriv < -1:
+            messagebox.showerror(
+                "Invalid Savitzky-Golay settings",
+                "Derivative order must be -1 or a non-negative integer."
+            )
+            return
 
         if window_length % 2 == 0:
             window_length += 1
@@ -1300,11 +1318,21 @@ class InteractiveArrayPlotter:
             window_length=window_length,
             polyorder=polyorder,
             axis=axis,
-            deriv=deriv,
+            deriv=0 if deriv == -1 else deriv,
             mode='interp'
         )
 
-        with self.data_operation('Savitzky-Golay filter'):
+        operation_name = 'Savitzky-Golay filter'
+        if deriv == -1:
+            integration_coordinate = self.Y if axis == 0 else self.X
+            filtered_data = cumulative_integral(
+                filtered_data,
+                integration_coordinate,
+                axis=axis,
+            )
+            operation_name = 'Savitzky-Golay cumulative integral'
+
+        with self.data_operation(operation_name):
             self.sliced_data = filtered_data
             if self.auto_scale_var.get():
                 self.apply_auto_scaling()
