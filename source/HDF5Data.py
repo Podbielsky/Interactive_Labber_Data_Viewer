@@ -1,6 +1,279 @@
 import h5py
+import math
 import numpy as np
 import os
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class HDF5MapPreview:
+    """A lightweight, read-only map representation for database previews."""
+
+    x: np.ndarray
+    y: np.ndarray
+    z: np.ndarray
+    x_label: str
+    y_label: str
+    z_label: str
+
+
+def _decode_hdf5_text(value):
+    """Decode the first textual field used by Labber metadata records."""
+    if isinstance(value, np.void) and value.dtype.names:
+        field_name = 'Name' if 'Name' in value.dtype.names else value.dtype.names[0]
+        value = value[field_name]
+    elif isinstance(value, (tuple, list, np.ndarray)) and np.ndim(value) > 0:
+        value = value[0]
+
+    if isinstance(value, np.bytes_):
+        value = bytes(value)
+    if isinstance(value, bytes):
+        return value.decode('utf-8', errors='replace').rstrip('\x00')
+    return str(value)
+
+
+def _read_hdf5_names(dataset):
+    """Return channel names from a Labber metadata dataset."""
+    values = np.asarray(dataset[()])
+    if values.ndim == 0:
+        values = values.reshape(1)
+    return [_decode_hdf5_text(value) for value in values]
+
+
+def inspect_viewer_hdf5(path):
+    """Validate a Labber/viewer-compatible HDF5 file and return its metadata."""
+    normalized_path = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isfile(normalized_path):
+        raise ValueError(f'The HDF5 file does not exist:\n{normalized_path}')
+    if not h5py.is_hdf5(normalized_path):
+        raise ValueError(f'The file is not a valid HDF5 container:\n{normalized_path}')
+
+    try:
+        with h5py.File(normalized_path, 'r') as hdf5_file:
+            required_paths = ('Data', 'Data/Data', 'Data/Channel names', 'Log list')
+            missing_paths = [name for name in required_paths if name not in hdf5_file]
+            if missing_paths:
+                raise ValueError(
+                    'The file is not in the supported Labber/viewer format. '
+                    f"Missing: {', '.join(missing_paths)}"
+                )
+
+            data_group = hdf5_file['Data']
+            data_dataset = hdf5_file['Data/Data']
+            if data_dataset.ndim != 3:
+                raise ValueError(
+                    'Data/Data must be a three-dimensional dataset; '
+                    f'found shape {data_dataset.shape}.'
+                )
+
+            channel_names = _read_hdf5_names(hdf5_file['Data/Channel names'])
+            if len(channel_names) != data_dataset.shape[1]:
+                raise ValueError(
+                    'The number of channel names does not match the channel '
+                    'dimension of Data/Data.'
+                )
+
+            log_names = _read_hdf5_names(hdf5_file['Log list'])
+            logged_channels = [name for name in log_names if name in channel_names]
+            if not logged_channels:
+                raise ValueError('Log list does not reference a channel in Data/Data.')
+
+            if 'Step dimensions' not in data_group.attrs:
+                raise ValueError('Data is missing the Step dimensions attribute.')
+            step_dimensions = tuple(
+                int(value) for value in np.ravel(data_group.attrs['Step dimensions'])
+            )
+            if not step_dimensions or any(value <= 0 for value in step_dimensions):
+                raise ValueError('Step dimensions must contain positive integers.')
+
+            stored_points = int(data_dataset.shape[0] * data_dataset.shape[2])
+            expected_points = math.prod(step_dimensions)
+            if stored_points > expected_points:
+                raise ValueError(
+                    'Data/Data contains more points than declared by Step dimensions.'
+                )
+
+            axis_names = [name for name in channel_names if name not in log_names]
+            if not axis_names:
+                raise ValueError('The file does not contain a sweep-axis channel.')
+
+            return {
+                'path': normalized_path,
+                'channel_names': channel_names,
+                'axis_names': axis_names,
+                'log_names': logged_channels,
+                'step_dimensions': step_dimensions,
+                'data_shape': tuple(data_dataset.shape),
+                'has_traces': 'Traces' in hdf5_file,
+            }
+    except OSError as error:
+        raise ValueError(f'Could not read the HDF5 file: {error}') from error
+
+
+def load_hdf5_map_preview(path, maximum_points_per_axis=None):
+    """Read only the final two-dimensional map needed for a lightweight preview."""
+    metadata = inspect_viewer_hdf5(path)
+    if maximum_points_per_axis is not None:
+        maximum_points_per_axis = int(maximum_points_per_axis)
+        if maximum_points_per_axis <= 0:
+            raise ValueError('The preview size limit must be positive.')
+
+    with h5py.File(metadata['path'], 'r') as hdf5_file:
+        channel_names = metadata['channel_names']
+        step_dimensions = metadata['step_dimensions']
+        data_dataset = hdf5_file['Data/Data']
+
+        map_column_count = step_dimensions[0]
+        map_row_count = step_dimensions[1] if len(step_dimensions) > 1 else 1
+        column_step = 1
+        row_step = 1
+        if maximum_points_per_axis is not None:
+            column_step = max(
+                1, math.ceil(map_column_count / maximum_points_per_axis)
+            )
+            row_step = max(
+                1, math.ceil(map_row_count / maximum_points_per_axis)
+            )
+
+        # Data/Data stores a channel as (map columns, flattened remaining
+        # dimensions). The flattened order used by the full plotter puts the
+        # displayed row dimension last. Select the last available map directly
+        # in that storage layout instead of constructing an N-dimensional array.
+        expected_flat_count = (
+            math.prod(step_dimensions[1:])
+            if len(step_dimensions) > 1
+            else 1
+        )
+        available_flat_count = min(data_dataset.shape[2], expected_flat_count)
+        if available_flat_count <= 0 or data_dataset.shape[0] <= 0:
+            raise ValueError('The selected preview map does not contain data.')
+        final_map_index = max(0, (available_flat_count - 1) // map_row_count)
+        flat_start = final_map_index * map_row_count
+        flat_stop = min(
+            flat_start + map_row_count,
+            available_flat_count,
+        )
+
+        sampled_column_count = len(
+            range(0, map_column_count, column_step)
+        )
+        sampled_row_count = len(range(0, map_row_count, row_step))
+
+        def read_preview_channel(channel_index):
+            """Read one strided map channel and pad an incomplete measurement."""
+            stored_column_stop = min(map_column_count, data_dataset.shape[0])
+            channel_values = np.asarray(
+                data_dataset[
+                    0:stored_column_stop:column_step,
+                    channel_index,
+                    flat_start:flat_stop:row_step,
+                ],
+                dtype=float,
+            ).T
+            preview_values = np.full(
+                (sampled_row_count, sampled_column_count),
+                np.nan,
+                dtype=float,
+            )
+            preview_values[
+                :channel_values.shape[0], :channel_values.shape[1]
+            ] = channel_values
+            return preview_values
+
+        def finite_median(values, fallback):
+            """Return a finite median for coordinate boundaries."""
+            values = np.asarray(values, dtype=float)
+            finite_values = values[np.isfinite(values)]
+            if finite_values.size == 0:
+                return float(fallback)
+            return float(np.median(finite_values))
+
+        def read_coordinate_grid(channel_index, axis):
+            """Read only coordinate edges and construct a raster display grid."""
+            stored_column_stop = min(map_column_count, data_dataset.shape[0])
+            if axis == 'x':
+                start_values = data_dataset[
+                    0,
+                    channel_index,
+                    flat_start:flat_stop:row_step,
+                ]
+                stop_values = data_dataset[
+                    stored_column_stop - 1,
+                    channel_index,
+                    flat_start:flat_stop:row_step,
+                ]
+                start = finite_median(start_values, 0)
+                stop = finite_median(stop_values, sampled_column_count - 1)
+                coordinate_line = np.linspace(
+                    start, stop, sampled_column_count, dtype=float
+                )
+                return np.tile(coordinate_line, (sampled_row_count, 1))
+
+            start_values = data_dataset[
+                0:stored_column_stop:column_step,
+                channel_index,
+                flat_start,
+            ]
+            stop_values = data_dataset[
+                0:stored_column_stop:column_step,
+                channel_index,
+                flat_stop - 1,
+            ]
+            start = finite_median(start_values, 0)
+            stop = finite_median(stop_values, sampled_row_count - 1)
+            coordinate_line = np.linspace(
+                start, stop, sampled_row_count, dtype=float
+            )
+            return np.tile(
+                coordinate_line.reshape(-1, 1),
+                (1, sampled_column_count),
+            )
+
+        z_label = metadata['log_names'][-1]
+        z_index = channel_names.index(z_label)
+        z_grid = read_preview_channel(z_index)
+
+        axis_names = metadata['axis_names']
+        x_label = axis_names[0]
+        x_index = channel_names.index(x_label)
+        if maximum_points_per_axis is None:
+            x_grid = read_preview_channel(x_index)
+        else:
+            x_grid = read_coordinate_grid(x_index, 'x')
+
+        if len(step_dimensions) == 1:
+            x_grid = np.tile(x_grid, (3, 1))
+            y_grid = np.tile(
+                np.arange(3, dtype=float).reshape(3, 1),
+                (1, x_grid.shape[1]),
+            )
+            z_grid = np.tile(z_grid, (3, 1))
+            y_label = 'y-dummy'
+        else:
+            if len(axis_names) < 2:
+                raise ValueError(
+                    'A two-dimensional preview requires at least two sweep-axis channels.'
+                )
+            y_label = axis_names[1]
+            y_index = channel_names.index(y_label)
+            if maximum_points_per_axis is None:
+                y_grid = read_preview_channel(y_index)
+            else:
+                y_grid = read_coordinate_grid(y_index, 'y')
+
+        if x_grid.shape != y_grid.shape or x_grid.shape != z_grid.shape:
+            raise ValueError('The preview axes and data do not have matching shapes.')
+        if z_grid.size == 0:
+            raise ValueError('The selected preview map is empty.')
+
+        return HDF5MapPreview(
+            x=np.array(x_grid, copy=True),
+            y=np.array(y_grid, copy=True),
+            z=np.array(z_grid, copy=True),
+            x_label=x_label,
+            y_label=y_label,
+            z_label=z_label,
+        )
 
 
 class HDF5Data:

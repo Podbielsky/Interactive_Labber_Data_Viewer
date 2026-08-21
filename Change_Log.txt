@@ -53,3 +53,18 @@ change in v0.4.6
 - changed button layout
 - added interactive fft-filter
 
+change in v0.4.7
+- added an optional, user-configurable measurement database
+- added recursive indexing of viewer-compatible HDF5 files with portable
+  relative paths and content-based duplicate detection
+- added a database browser with directory tree, asynchronous map previews,
+  special-measurement stars, and persistent comments
+- added automatic, independent database copies for dropped HDF5 files and HDF5
+  files created from dropped NPZ archives
+- added database rescanning and preservation of comments and stars when a
+  uniquely identifiable measurement is moved inside the database
+- fixed database previews for measurements declaring more than 32 sweep
+  dimensions and prevented large previews from loading complete data channels
+- serialized preview I/O, retained only the newest pending selection, reduced
+  coordinate reads to their boundary lines, and switched preview rendering to
+  an adaptive raster to prevent large files from stalling the browser

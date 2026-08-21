@@ -1,4 +1,4 @@
-Installation Instructions for Windows Systems (updated 19.08.2026)
+Installation Instructions for Windows Systems (updated 20.08.2026)
 
 ------------ |
 Requirements |
@@ -124,6 +124,53 @@ Opening HDF5 and NPZ files with drag and drop
   a NumPy array that can be read without pickle. Object arrays that require
   Python pickle loading are rejected and reported by field name.
 - Drop only one file at a time. Files with spaces in their names are supported.
+- If a measurement database is active, a dropped HDF5 file (including one
+  created from NPZ) is copied into the database's "Drag and Drop" directory.
+  The managed copy is opened. An identical file already in the database is not
+  copied again.
+
+
+Using the optional measurement database
+-->
+- The database is disabled by default. Its location is stored as
+  "database_folder" in the user-local preferences.json file; the default value
+  is null.
+- Select File > Set Database Folder... and choose a directory. The viewer
+  creates a portable SQLite index in its hidden .labber_viewer directory and a
+  "Drag and Drop" import directory.
+- Creating or selecting a database starts a recursive background scan. Valid
+  viewer-compatible .hdf5 and .h5 files are indexed. Other HDF5 layouts,
+  unreadable files, and symbolic links are skipped.
+- Measurement paths are stored relative to the selected database directory.
+  Keep or copy the complete database directory when moving it to another disk.
+- Select File > Browse Database... to open the database overview. This command
+  is disabled while no valid database is configured.
+- The left side of the browser reproduces the database directory structure.
+  Click a measurement once to load its map preview. The preview uses the last
+  logged data channel and the final slice of higher-dimensional measurements.
+- Preview loading reads only that two-dimensional HDF5 slice and samples at
+  most 256 points per displayed axis directly from disk. It does not construct
+  the complete multidimensional measurement array.
+- Very large map planes use a smaller 64- or 128-pixel raster automatically.
+  Only one preview is read at a time; when the selection changes quickly, the
+  viewer keeps the newest pending selection instead of starting parallel reads.
+- When the measurement tree has keyboard focus, use the Up and Down arrow keys
+  to move directly between measurements and update the preview. Folder entries
+  are skipped.
+- Click the same measurement again, press Enter, or select "Open Selected" to
+  load its managed HDF5 path in the main file viewer.
+- Use "Mark as special measurement" to add a star. Comments entered below the
+  preview are stored after selecting "Save Comment". Stars and comments remain
+  available after restarting or rescanning the application.
+- Select "Rescan Database" after adding, moving, renaming, or deleting files
+  directly inside the database folder. A uniquely identified moved file keeps
+  its existing star and comment.
+- Files dragged into an active database are copied atomically, checked for
+  corruption, and given a collision-free filename. The database copy remains
+  usable if the original file is later moved or deleted.
+- Database indexing, hashing, file copying, and preview extraction run in
+  background threads. Large databases may take time to scan but should not
+  freeze the interface.
 
 
 Checking for updates

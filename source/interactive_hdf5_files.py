@@ -28,6 +28,8 @@ from creating_hdf5_files_from_npy_files import (
     get_npz_output_path,
     select_npz_field_mapping,
 )
+from database_browser import DatabaseBrowser
+from database_manager import MeasurementDatabase
 
 import traceback
 
@@ -49,6 +51,10 @@ UPDATE_ICON_DIRECTORY = 'icons'
 UPDATE_ICON_EXTENSIONS = {'.icns', '.ico', '.png'}
 PREFERENCES_FILE_NAME = 'preferences.json'
 PREFERENCES_DIRECTORY_NAME = 'Labber HDF5 Viewer'
+DEFAULT_APPLICATION_PREFERENCES = {
+    'theme': DEFAULT_THEME,
+    'database_folder': None,
+}
 
 
 def set_application_icon(window):
@@ -99,16 +105,26 @@ def load_application_preferences():
         with open(get_preferences_path(), 'r', encoding='utf-8-sig') as preferences_file:
             preferences = json.load(preferences_file)
     except (OSError, UnicodeError, json.JSONDecodeError):
-        return {}
+        return dict(DEFAULT_APPLICATION_PREFERENCES)
 
-    return preferences if isinstance(preferences, dict) else {}
+    if not isinstance(preferences, dict):
+        return dict(DEFAULT_APPLICATION_PREFERENCES)
+
+    merged_preferences = dict(DEFAULT_APPLICATION_PREFERENCES)
+    merged_preferences.update(preferences)
+    if not isinstance(merged_preferences.get('database_folder'), (str, type(None))):
+        merged_preferences['database_folder'] = None
+    return merged_preferences
 
 
-def save_application_style(theme_name):
-    """Persist the selected theme in the current user's preferences."""
+def save_application_preferences(updates):
+    """Atomically merge application preference updates into the user JSON."""
+    if not isinstance(updates, dict):
+        raise ValueError('Preference updates must be provided as a dictionary.')
+
     preferences_path = get_preferences_path()
     preferences = load_application_preferences()
-    preferences['theme'] = theme_name
+    preferences.update(updates)
     os.makedirs(os.path.dirname(preferences_path), exist_ok=True)
 
     temporary_path = f'{preferences_path}.{os.getpid()}.tmp'
@@ -123,6 +139,29 @@ def save_application_style(theme_name):
         except OSError:
             pass
         raise
+
+
+def save_application_style(theme_name):
+    """Persist the selected theme in the current user's preferences."""
+    save_application_preferences({'theme': theme_name})
+
+
+def ensure_application_preference_defaults():
+    """Write newly introduced defaults once without replacing unknown keys."""
+    preferences_path = get_preferences_path()
+    try:
+        with open(preferences_path, 'r', encoding='utf-8-sig') as preferences_file:
+            stored_preferences = json.load(preferences_file)
+    except FileNotFoundError:
+        stored_preferences = {}
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return
+
+    if not isinstance(stored_preferences, dict):
+        return
+    if all(key in stored_preferences for key in DEFAULT_APPLICATION_PREFERENCES):
+        return
+    save_application_preferences({})
 
 
 def apply_saved_application_style(root):
@@ -932,6 +971,224 @@ def check_for_updates(root, silent_if_current=False):
     root.after(100, finish_update_check)
 
 
+def load_configured_database(root):
+    """Attach the configured database when its portable index still exists."""
+    root._labber_database = None
+    root._labber_database_browsers = []
+    database_folder = load_application_preferences().get('database_folder')
+    if not database_folder:
+        return None
+
+    normalized_folder = os.path.abspath(os.path.expanduser(database_folder))
+    if MeasurementDatabase.is_initialized(normalized_folder):
+        root._labber_database = MeasurementDatabase(normalized_folder)
+    return root._labber_database
+
+
+def update_database_menu_state(root):
+    """Enable database browsing only when an index is configured."""
+    file_menu = getattr(root, '_labber_file_menu', None)
+    menu_index = getattr(root, '_labber_browse_database_menu_index', None)
+    if file_menu is None or menu_index is None:
+        return
+    state = tk.NORMAL if getattr(root, '_labber_database', None) else tk.DISABLED
+    file_menu.entryconfigure(menu_index, state=state)
+
+
+def refresh_open_database_browsers(root):
+    """Refresh browser trees after a managed drag-and-drop import."""
+    browsers = getattr(root, '_labber_database_browsers', [])
+    active_browsers = []
+    for browser in browsers:
+        if not browser.closed and browser.window.winfo_exists():
+            browser.refresh_records()
+            active_browsers.append(browser)
+    root._labber_database_browsers = active_browsers
+
+
+def open_database_browser(root):
+    """Open the optional database overview window."""
+    database = getattr(root, '_labber_database', None)
+    if database is None:
+        messagebox.showinfo(
+            'No Database Configured',
+            'Use File → Set Database Folder… before browsing measurements.',
+            parent=root,
+        )
+        return None
+    open_file_callback = getattr(root, '_labber_open_hdf5_path', None)
+    if open_file_callback is None:
+        messagebox.showerror(
+            'File Viewer Not Ready',
+            'The main HDF5 file view is not ready yet.',
+            parent=root,
+        )
+        return None
+
+    def unregister_browser(browser):
+        browsers = getattr(root, '_labber_database_browsers', [])
+        root._labber_database_browsers = [
+            candidate for candidate in browsers if candidate is not browser
+        ]
+
+    browser = DatabaseBrowser(
+        root,
+        database,
+        open_file_callback,
+        icon_callback=set_application_icon,
+        on_close=unregister_browser,
+    )
+    root._labber_database_browsers.append(browser)
+    return browser
+
+
+def set_database_folder(root):
+    """Create/open a managed database folder and index it in a worker."""
+    if getattr(root, '_labber_database_scan_running', False):
+        messagebox.showinfo(
+            'Database Scan in Progress',
+            'Please wait for the current database scan to finish.',
+            parent=root,
+        )
+        return
+
+    selected_folder = filedialog.askdirectory(
+        title='Select or Create a Measurement Database Folder',
+        parent=root,
+    )
+    if not selected_folder:
+        return
+
+    database = MeasurementDatabase(selected_folder)
+    try:
+        database.initialize()
+        save_application_preferences(
+            {'database_folder': database.root_directory}
+        )
+    except (OSError, ValueError) as error:
+        messagebox.showerror(
+            'Could Not Create Database', str(error), parent=root
+        )
+        return
+
+    for browser in list(getattr(root, '_labber_database_browsers', [])):
+        if not browser.closed:
+            browser.close()
+    root._labber_database = database
+    update_database_menu_state(root)
+
+    progress_window = ttk.Toplevel(root)
+    progress_window.title('Index Measurement Database')
+    progress_window.geometry('520x165')
+    progress_window.resizable(False, False)
+    progress_window.transient(root)
+    set_application_icon(progress_window)
+    status_variable = tk.StringVar(value='Searching for HDF5 measurements…')
+    ttk.Label(
+        progress_window,
+        textvariable=status_variable,
+        wraplength=480,
+    ).pack(fill=tk.X, padx=20, pady=(18, 8))
+    progress_variable = tk.DoubleVar(value=0)
+    progress_bar = ttk.Progressbar(
+        progress_window,
+        variable=progress_variable,
+        maximum=1,
+        mode='determinate',
+    )
+    progress_bar.pack(fill=tk.X, padx=20, pady=6)
+
+    cancel_event = threading.Event()
+    cancel_button = ttk.Button(
+        progress_window,
+        text='Cancel',
+        bootstyle='secondary',
+    )
+    cancel_button.pack(pady=(5, 12))
+    result_queue = queue.Queue()
+    root._labber_database_scan_running = True
+
+    def cancel_scan():
+        cancel_event.set()
+        cancel_button.configure(state=tk.DISABLED)
+        status_variable.set('Cancelling after the current file…')
+
+    cancel_button.configure(command=cancel_scan)
+    progress_window.protocol('WM_DELETE_WINDOW', cancel_scan)
+
+    def report_progress(processed, total, path):
+        result_queue.put(('progress', processed, total, path))
+
+    def scan_worker():
+        try:
+            result_queue.put(
+                (
+                    'success',
+                    database.scan(
+                        progress_callback=report_progress,
+                        cancel_event=cancel_event,
+                    ),
+                )
+            )
+        except Exception as error:
+            result_queue.put(('error', error))
+
+    def finish_scan():
+        try:
+            while True:
+                result = result_queue.get_nowait()
+                if result[0] == 'progress':
+                    _, processed, total, path = result
+                    progress_bar.configure(maximum=max(1, total))
+                    progress_variable.set(processed)
+                    status_variable.set(
+                        f'Indexing {processed}/{total}: '
+                        f'{os.path.basename(path) if path else ""}'
+                    )
+                    continue
+
+                root._labber_database_scan_running = False
+                progress_window.destroy()
+                if result[0] == 'error':
+                    messagebox.showerror(
+                        'Database Scan Failed', str(result[1]), parent=root
+                    )
+                    return
+
+                scan_result = result[1]
+                refresh_open_database_browsers(root)
+                if scan_result.cancelled:
+                    messagebox.showinfo(
+                        'Database Scan Cancelled',
+                        'The database folder remains configured. Run Browse '
+                        'Database → Rescan Database to index it later.',
+                        parent=root,
+                    )
+                    return
+
+                summary = (
+                    f'Indexed {scan_result.indexed} valid measurement(s) from '
+                    f'{scan_result.discovered} HDF5 file(s).'
+                )
+                if scan_result.invalid:
+                    summary += (
+                        f'\n\nSkipped {len(scan_result.invalid)} incompatible '
+                        'or unreadable file(s).'
+                    )
+                messagebox.showinfo('Database Ready', summary, parent=root)
+                return
+        except queue.Empty:
+            pass
+
+        try:
+            root.after(100, finish_scan)
+        except tk.TclError:
+            pass
+
+    threading.Thread(target=scan_worker, daemon=True).start()
+    root.after(100, finish_scan)
+
+
 def data_menu_bar(root, hdf5data):
     menubar = ttk.Menu(root)
     # Adding File Menu and commands
@@ -941,6 +1198,19 @@ def data_menu_bar(root, hdf5data):
     file.add_command(label='Move File to', command=lambda: move_data(hdf5data))
     file.add_command(label='Save File as', command=lambda: save_data_as(hdf5data))
     file.add_command(label='Create a HDF5 File from Numpy Files', command=lambda : create_hdf5_files_from_npy(root))
+    file.add_separator()
+    file.add_command(
+        label='Set Database Folder…',
+        command=lambda: set_database_folder(root),
+    )
+    file.add_command(
+        label='Browse Database…',
+        command=lambda: open_database_browser(root),
+    )
+    root._labber_file_menu = file
+    root._labber_browse_database_menu_index = file.index('end')
+    update_database_menu_state(root)
+    file.add_separator()
     file.add_command(label='Remove Selected Datasets', command=lambda: remove_selected_options_window(root, hdf5data)) #Hannah Vogel: to select datasets to be removed
     file.add_separator()
     file.add_command(label='Add Traces from HDF5 File', command=lambda: add_traces_window(hdf5data)) # Nico Reinders: to add traces to current file from another HDF5 file
@@ -1759,6 +2029,88 @@ def display_hdf5_file(root, hdf5Data):
         root.title(f'HDF5 File Viewer — {hdf5Data.file_name}')
         return True
 
+    def open_hdf5_path(path):
+        """Load an explicit path and immediately refresh the main file tree."""
+        try:
+            set_hdf5_path(hdf5Data, path)
+        except (OSError, ValueError) as error:
+            messagebox.showerror(
+                'Could Not Open HDF5 File', str(error), parent=root
+            )
+            return False
+        return open_hdf5_file()
+
+    # DatabaseBrowser uses the same validated path-opening route as drag/drop.
+    root._labber_open_hdf5_path = open_hdf5_path
+
+    def begin_database_import(source_path):
+        """Copy a dropped measurement into the active database in a worker."""
+        database = getattr(root, '_labber_database', None)
+        if database is None:
+            return open_hdf5_path(source_path)
+        if getattr(root, '_labber_database_import_running', False):
+            messagebox.showinfo(
+                'Database Import in Progress',
+                'Please wait for the current measurement import to finish.',
+                parent=root,
+            )
+            return False
+
+        root._labber_database_import_running = True
+        root.configure(cursor='watch')
+        drop_label.configure(
+            text=f'Adding {os.path.basename(source_path)} to the database…',
+            bootstyle='info',
+        )
+        import_results = queue.Queue(maxsize=1)
+
+        def import_worker():
+            try:
+                import_results.put(
+                    ('success', database.import_dropped_file(source_path))
+                )
+            except Exception as error:
+                import_results.put(('error', error))
+
+        def finish_database_import():
+            try:
+                result_type, result = import_results.get_nowait()
+            except queue.Empty:
+                try:
+                    root.after(100, finish_database_import)
+                except tk.TclError:
+                    pass
+                return
+
+            root._labber_database_import_running = False
+            root.configure(cursor='')
+            drop_label.configure(text=drop_instruction, bootstyle='secondary')
+            if result_type == 'error':
+                messagebox.showwarning(
+                    'Database Import Failed',
+                    f'The file could not be added to the configured database:\n'
+                    f'{result}\n\nThe original file will be opened without '
+                    'adding it to the database.',
+                    parent=root,
+                )
+                return open_hdf5_path(source_path)
+
+            managed_path = database.get_absolute_path(result.record)
+            opened = open_hdf5_path(managed_path)
+            if opened:
+                refresh_open_database_browsers(root)
+            return opened
+
+        threading.Thread(target=import_worker, daemon=True).start()
+        root.after(100, finish_database_import)
+        return True
+
+    def open_dropped_hdf5(path):
+        """Open directly or import into the enabled managed database first."""
+        if getattr(root, '_labber_database', None) is not None:
+            return begin_database_import(path)
+        return open_hdf5_path(path)
+
     def begin_npz_conversion(dropped_path):
         """Collect field choices, then convert an NPZ without blocking Tk."""
         if getattr(root, '_labber_npz_conversion_running', False):
@@ -1834,16 +2186,7 @@ def display_hdf5_file(root, hdf5Data):
                 )
                 return
 
-            try:
-                set_hdf5_path(hdf5Data, result)
-            except (OSError, ValueError) as error:
-                messagebox.showerror(
-                    'Could Not Open Converted HDF5 File',
-                    str(error),
-                    parent=root,
-                )
-                return
-            open_hdf5_file()
+            open_dropped_hdf5(result)
 
         threading.Thread(target=conversion_worker, daemon=True).start()
         root.after(100, finish_npz_conversion)
@@ -1871,22 +2214,20 @@ def display_hdf5_file(root, hdf5Data):
             )
             return COPY
 
-        try:
-            if extension in HDF5_FILE_EXTENSIONS:
-                set_hdf5_path(hdf5Data, dropped_path)
-            else:
-                raise ValueError(
-                    'Only .hdf5, .h5, and .npz files can be dropped here.'
-                )
-        except (OSError, ValueError) as error:
+        if extension not in HDF5_FILE_EXTENSIONS:
             messagebox.showerror(
                 'Could Not Open Data File',
-                str(error),
+                'Only .hdf5, .h5, and .npz files can be dropped here.',
                 parent=root,
             )
             return REFUSE_DROP
 
-        return COPY if open_hdf5_file() else REFUSE_DROP
+        if getattr(root, '_labber_database', None) is not None:
+            root.after_idle(
+                lambda selected_path=dropped_path: open_dropped_hdf5(selected_path)
+            )
+            return COPY
+        return COPY if open_dropped_hdf5(dropped_path) else REFUSE_DROP
 
     def close_tree_and_hdf5data(hdf5Data):
         working_directory = hdf5Data.wdir
@@ -2014,6 +2355,20 @@ def main():
                 parent=root,
             )
             return
+        if getattr(root, '_labber_database_import_running', False):
+            messagebox.showinfo(
+                'Database Import in Progress',
+                'Please wait until the database import has finished.',
+                parent=root,
+            )
+            return
+        if getattr(root, '_labber_database_scan_running', False):
+            messagebox.showinfo(
+                'Database Scan in Progress',
+                'Cancel or finish the database scan before closing the viewer.',
+                parent=root,
+            )
+            return
         try:
             if os.path.exists(wdir):
                 shutil.rmtree(wdir)
@@ -2030,8 +2385,13 @@ def main():
     # Create the themed application root window.
     hdf5Data = HDF5Data(wdir=wdir)
     root = ttk.App(theme=DEFAULT_THEME)
+    try:
+        ensure_application_preference_defaults()
+    except OSError as error:
+        print(f'Could not add preference defaults: {error}')
     apply_saved_application_style(root)
     set_application_icon(root)
+    load_configured_database(root)
     data_bar = data_menu_bar(root, hdf5Data)
     root.config(menu=data_bar)
     root.title('HDF5 File Viewer')
