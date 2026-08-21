@@ -15,6 +15,7 @@ class HDF5MapPreview:
     x_label: str
     y_label: str
     z_label: str
+    is_linecut: bool = False
 
 
 def _decode_hdf5_text(value):
@@ -234,26 +235,30 @@ def load_hdf5_map_preview(path, maximum_points_per_axis=None):
         z_grid = read_preview_channel(z_index)
 
         axis_names = metadata['axis_names']
+        is_linecut = len(axis_names) == 1
         x_label = axis_names[0]
         x_index = channel_names.index(x_label)
-        if maximum_points_per_axis is None:
+        if maximum_points_per_axis is None or is_linecut:
             x_grid = read_preview_channel(x_index)
         else:
             x_grid = read_coordinate_grid(x_index, 'x')
 
-        if len(step_dimensions) == 1:
-            x_grid = np.tile(x_grid, (3, 1))
+        if is_linecut:
+            line_x = np.ravel(x_grid)
+            line_z = np.ravel(z_grid)
+            valid_points = np.isfinite(line_x)
+            line_x = line_x[valid_points]
+            line_z = line_z[valid_points]
+            if line_x.size == 0:
+                raise ValueError('The one-axis measurement does not contain data.')
+            x_grid = np.tile(line_x, (3, 1))
             y_grid = np.tile(
                 np.arange(3, dtype=float).reshape(3, 1),
                 (1, x_grid.shape[1]),
             )
-            z_grid = np.tile(z_grid, (3, 1))
+            z_grid = np.tile(line_z, (3, 1))
             y_label = 'y-dummy'
         else:
-            if len(axis_names) < 2:
-                raise ValueError(
-                    'A two-dimensional preview requires at least two sweep-axis channels.'
-                )
             y_label = axis_names[1]
             y_index = channel_names.index(y_label)
             if maximum_points_per_axis is None:
@@ -273,6 +278,7 @@ def load_hdf5_map_preview(path, maximum_points_per_axis=None):
             x_label=x_label,
             y_label=y_label,
             z_label=z_label,
+            is_linecut=is_linecut,
         )
 
 
@@ -604,13 +610,24 @@ class HDF5Data:
         try:
             if self.file is None:
                 self.set_data()
-            attrs = self.file['Data'].attrs.items()
-            step_dim = 0
-            for attr_2 in attrs:
-                for attr in attrs:
-                    if attr[0] == 'Step dimensions' and attr_2[0] == 'Step index':
-                        step_dim = [attr[1][i] for i in attr_2[1]]
-            self.measure_dim = step_dim
+            data_attributes = self.file['Data'].attrs
+            step_dimensions = np.atleast_1d(
+                data_attributes['Step dimensions']
+            ).astype(int).ravel()
+            step_indices = np.atleast_1d(
+                data_attributes.get(
+                    'Step index', np.arange(step_dimensions.size)
+                )
+            ).astype(int).ravel()
+            if step_indices.size == 0:
+                step_indices = np.arange(step_dimensions.size)
+            if np.any(step_indices < 0) or np.any(
+                step_indices >= step_dimensions.size
+            ):
+                raise ValueError('Step index references a missing step dimension.')
+            self.measure_dim = [
+                int(step_dimensions[index]) for index in step_indices
+            ]
         except Exception as e:
             print(f"Error getting the measurement dimensions : {e}")
 

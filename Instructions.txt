@@ -148,6 +148,10 @@ Using the optional measurement database
 - The left side of the browser reproduces the database directory structure.
   Click a measurement once to load its map preview. The preview uses the last
   logged data channel and the final slice of higher-dimensional measurements.
+- Measurements containing only one sweep-axis channel are shown as linecuts in
+  the database preview. Opening the measurement in the map viewer repeats the
+  line across a synthetic three-row Y axis named "y-dummy", so the existing
+  crosshair, linecut, and displayed-data tools remain available.
 - Preview loading reads only that two-dimensional HDF5 slice and samples at
   most 256 points per displayed axis directly from disk. It does not construct
   the complete multidimensional measurement array.

@@ -53,7 +53,7 @@ change in v0.4.6
 - changed button layout
 - added interactive fft-filter
 
-change in v0.4.7
+change in v0.4.8
 - added an optional, user-configurable measurement database
 - added recursive indexing of viewer-compatible HDF5 files with portable
   relative paths and content-based duplicate detection
@@ -68,3 +68,7 @@ change in v0.4.7
 - serialized preview I/O, retained only the newest pending selection, reduced
   coordinate reads to their boundary lines, and switched preview rendering to
   an adaptive raster to prevent large files from stalling the browser
+- added one-axis measurement recognition based on stored axis channels,
+  synthetic Y-axis map display, and linecut database previews
+- fixed scalar Step index loading and removed unused full-size parameter-index
+  lists that could consume excessive memory for long one-axis measurements

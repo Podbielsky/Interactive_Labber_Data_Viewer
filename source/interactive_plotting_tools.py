@@ -258,7 +258,17 @@ class InteractiveArrayPlotter:
         self.name_data_z = ''
         self.name_data_y_axis = ''
         self.name_data_x_axis = ''
-        self.num_dimensions = len(self.data.measure_dim) - 2
+        measurement_axis_count = (
+            0 if self.data.measure_axis is None else len(self.data.measure_axis)
+        )
+        if measurement_axis_count == 0:
+            raise ValueError('The measurement does not contain a sweep axis.')
+        self.single_axis_measurement = measurement_axis_count == 1
+        self.num_dimensions = (
+            0
+            if self.single_axis_measurement
+            else max(0, len(self.data.measure_dim) - 2)
+        )
         print(self.num_dimensions)
         self.name_data = [str(label) for label in self.data.name_data]
         self.name_data = [label.encode('utf-8').decode('utf-8') for label in self.name_data]
@@ -388,7 +398,10 @@ class InteractiveArrayPlotter:
 
         # Pre calculate values for selection
         self.parameter_labels = [np.flip(self.data.name_axis)[i] for i in range(self.num_dimensions)]
-        self.parameter_values = [list(range(np.flip(self.data.measure_dim)[i])) for i in range(len(np.flip(self.data.measure_dim)))]
+        self.parameter_values = [
+            range(int(np.flip(self.data.measure_dim)[i]))
+            for i in range(self.num_dimensions)
+        ]
         self.parameter_comboboxes = []
 
         self.display_values_list = []
@@ -575,9 +588,17 @@ class InteractiveArrayPlotter:
             index = self.display_values_list[i].index(float(display_value))
             selected_indices.append(index)
 
-        if self.num_dimensions == -1:
-            x_values = self.data.measure_axis[-1].flatten()
-            self.nan_mask = ~np.isnan(x_values)
+        if self.single_axis_measurement:
+            x_values = np.ravel(self.data.measure_axis[0])
+            original_data = np.ravel(
+                self.data.measure_data[
+                    self.name_data.index(self.data_combobox.get())
+                ]
+            )
+            point_count = min(x_values.size, original_data.size)
+            x_values = x_values[:point_count]
+            original_data = original_data[:point_count]
+            self.nan_mask = np.isfinite(x_values)
             x_values = x_values[self.nan_mask]
 
             # Create X as a 2D array with each x-value repeated twice
@@ -586,11 +607,10 @@ class InteractiveArrayPlotter:
 
             # Create Y with two different values for each X position
             # This creates two rows in the 2D plot
-            y_values = np.array([0, 1, 3])  # Two arbitrary Y values
+            y_values = np.array([0, 1, 2], dtype=float)
             self.Y = np.swapaxes(np.tile(y_values, (len(x_values), 1)), 0, 1)
 
             # Handle sliced_data: Repeat each value twice to match X and Y dimensions
-            original_data = self.data.measure_data[self.name_data.index(self.data_combobox.get())].flatten()
             filtered_data = original_data[self.nan_mask]
             # Repeat each value to create a 2D array with identical values in each row
             self.sliced_data = np.swapaxes(np.repeat(filtered_data[:, np.newaxis], 3, axis=1), 0, 1)
@@ -600,7 +620,7 @@ class InteractiveArrayPlotter:
             self.ylim = (np.min(self.Y), np.max(self.Y))
 
             self.name_data_z = self.data_combobox.get()
-            self.name_data_x_axis = str(np.flip(self.data.name_axis)[-1])
+            self.name_data_x_axis = str(self.data.name_axis[0])
             self.name_data_y_axis = 'y-dummy'
 
 
@@ -2953,8 +2973,19 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
             # Convert the display value back to an index
             index = self.display_values_list[i].index(float(display_value))
             selected_indices.append(index)
-        self.line_order_indeces = (self.data.trace_order).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)]
-        trace_index = int(self.line_order_indeces[self.trace_y_index][self.trace_x_index])
+        if self.single_axis_measurement:
+            self.line_order_indeces = np.ravel(self.data.trace_order)
+            trace_index = int(self.line_order_indeces[self.trace_x_index])
+            self.trace_y_index = 0
+        else:
+            self.line_order_indeces = (self.data.trace_order).reshape(
+                np.flip(self.data.measure_dim)
+            )[tuple(selected_indices)]
+            trace_index = int(
+                self.line_order_indeces[
+                    self.trace_y_index
+                ][self.trace_x_index]
+            )
         self.trace_selected = self.data.trace_reference[::, 0, trace_index]
         self.times = self.data.traces_dt * np.arange(0, len(self.trace_selected))
         self.line_ax.clear()
@@ -2978,7 +3009,11 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
     def on_right_click(self, event):
         if event.button == 3:
             self.trace_x_index = np.argmin(np.abs(self.X[0] - event.xdata))
-            self.trace_y_index = np.argmin(np.abs(self.Y[:, 0] - event.ydata))
+            self.trace_y_index = (
+                0
+                if self.single_axis_measurement
+                else np.argmin(np.abs(self.Y[:, 0] - event.ydata))
+            )
             print(f"Right-clicked at coordinates: ({self.trace_x_index}, {self.trace_y_index})")
             self.update_line_plot()
 

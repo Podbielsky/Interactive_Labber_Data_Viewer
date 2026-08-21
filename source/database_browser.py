@@ -445,21 +445,36 @@ class DatabaseBrowser:
         """Render a completed preview on the Tk event thread."""
         self.preview_figure.clear()
         self.preview_axis = self.preview_figure.add_subplot(111)
-        finite_z = np.ma.masked_invalid(preview.z)
-        preview_image = self.preview_axis.imshow(
-            finite_z,
-            origin='lower',
-            aspect='auto',
-            interpolation='nearest',
-            extent=self._preview_extent(preview),
-            cmap='viridis',
-        )
-        self.preview_axis.set_xlabel(preview.x_label)
-        self.preview_axis.set_ylabel(preview.y_label)
-        self.preview_axis.set_title(preview.z_label)
-        self.preview_figure.colorbar(
-            preview_image, ax=self.preview_axis, label=preview.z_label
-        )
+        if preview.is_linecut:
+            line_x = np.ravel(preview.x[0])
+            line_z = np.ravel(preview.z[0])
+            finite_points = np.isfinite(line_x) & np.isfinite(line_z)
+            self.preview_axis.plot(
+                line_x[finite_points],
+                line_z[finite_points],
+                color='#1f77b4',
+                linewidth=1.2,
+            )
+            self.preview_axis.set_xlabel(preview.x_label)
+            self.preview_axis.set_ylabel(preview.z_label)
+            self.preview_axis.set_title(preview.z_label)
+            self.preview_axis.grid(True, alpha=0.25)
+        else:
+            finite_z = np.ma.masked_invalid(preview.z)
+            preview_image = self.preview_axis.imshow(
+                finite_z,
+                origin='lower',
+                aspect='auto',
+                interpolation='nearest',
+                extent=self._preview_extent(preview),
+                cmap='viridis',
+            )
+            self.preview_axis.set_xlabel(preview.x_label)
+            self.preview_axis.set_ylabel(preview.y_label)
+            self.preview_axis.set_title(preview.z_label)
+            self.preview_figure.colorbar(
+                preview_image, ax=self.preview_axis, label=preview.z_label
+            )
         self.preview_canvas.draw_idle()
         self.previewed_measurement_id = measurement_id
         self.preview_loading = False

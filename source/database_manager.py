@@ -272,7 +272,7 @@ class MeasurementDatabase:
         os.makedirs(self.preview_directory, exist_ok=True)
         cache_path = os.path.join(
             self.preview_directory,
-            f'{record.sha256}-{maximum_points_per_axis}.npz',
+            f'v2-{record.sha256}-{maximum_points_per_axis}.npz',
         )
         measurement_path = self.get_absolute_path(record)
         file_stat = os.stat(measurement_path)
@@ -291,6 +291,7 @@ class MeasurementDatabase:
                         x_label=str(cached_preview['x_label'].item()),
                         y_label=str(cached_preview['y_label'].item()),
                         z_label=str(cached_preview['z_label'].item()),
+                        is_linecut=bool(cached_preview['is_linecut'].item()),
                     )
             except (OSError, KeyError, ValueError):
                 try:
@@ -321,6 +322,7 @@ class MeasurementDatabase:
                     x_label=np.asarray(preview.x_label),
                     y_label=np.asarray(preview.y_label),
                     z_label=np.asarray(preview.z_label),
+                    is_linecut=np.asarray(preview.is_linecut),
                 )
             os.replace(temporary_path, cache_path)
         finally:
