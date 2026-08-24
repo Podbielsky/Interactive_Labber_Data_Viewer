@@ -177,6 +177,18 @@ Using the optional measurement database
   freeze the interface.
 
 
+Displaying maps acquired with alternating X sweeps
+-->
+- Open the measurement with Plotting > Plot Map or Plot Map with Trace Data.
+- In the map window, use the "X sweep direction" radio buttons and select
+  "Alternating" when the acquisition reversed the X sweep on every second row.
+- The viewer reverses every second signal row and normalizes stored X-coordinate
+  rows when necessary. The map, crosshair, ROI, linecuts, displayed-data export,
+  and trace selection then use the corrected ordering.
+- Select "Normal" for measurements acquired in the same X direction on every
+  row. Normal is the default and one-axis measurements keep this setting.
+
+
 Checking for updates
 -->
 - The viewer silently checks the repository's main branch shortly after startup.

@@ -77,17 +77,109 @@ def canonicalize_plot_grid(x_grid, y_grid, data_grid):
             f'{x_array.shape}, {y_array.shape}, and {data_array.shape}.'
         )
 
-    standard_score = (
-        _normalized_grid_variation(x_array, axis=1)
-        + _normalized_grid_variation(y_array, axis=0)
-    )
-    transposed_score = (
-        _normalized_grid_variation(x_array, axis=0)
-        + _normalized_grid_variation(y_array, axis=1)
-    )
-    if transposed_score > standard_score + 1e-12:
+    x_column_variation = _normalized_grid_variation(x_array, axis=1)
+    x_row_variation = _normalized_grid_variation(x_array, axis=0)
+    y_column_variation = _normalized_grid_variation(y_array, axis=1)
+    y_row_variation = _normalized_grid_variation(y_array, axis=0)
+
+    # Judge the two coordinates together. Summing their variations makes a
+    # serpentine X grid look transposed because alternate rows place opposite
+    # X endpoints beside one another. The Jacobian-like products below still
+    # identify Y as the row coordinate when it is constant within each row.
+    standard_score = x_column_variation * y_row_variation
+    transposed_score = x_row_variation * y_column_variation
+    if max(standard_score, transposed_score) <= 1e-15:
+        # Degenerate grids (for example, a singleton coordinate) do not carry
+        # enough two-axis information for the product test. Retain the older
+        # one-coordinate fallback for those cases.
+        standard_score = x_column_variation + y_row_variation
+        transposed_score = x_row_variation + y_column_variation
+
+    if transposed_score > standard_score + 1e-15:
         return x_array.T, y_array.T, data_array.T
     return x_array, y_array, data_array
+
+
+def _row_direction(values):
+    """Return the predominant direction of finite values in a grid row."""
+    row = np.asarray(values, dtype=float)
+    finite_values = row[np.isfinite(row)]
+    if finite_values.size < 2:
+        return 0
+
+    differences = np.diff(finite_values)
+    differences = differences[np.isfinite(differences) & (differences != 0)]
+    if differences.size == 0:
+        return 0
+    return int(np.sign(np.nanmedian(differences)))
+
+
+def reverse_alternating_rows(array):
+    """Return a copy with the acquisition order of every second row reversed."""
+    corrected = np.array(array, copy=True)
+    if corrected.ndim != 2:
+        raise ValueError('Alternating sweep correction requires a 2-D array.')
+    corrected[1::2, :] = corrected[1::2, ::-1]
+    return corrected
+
+
+def correct_alternating_x_sweep(
+    x_grid,
+    y_grid,
+    data_grid,
+    acquisition_row_indices=None,
+):
+    """Correct maps acquired with X reversing direction on every second row.
+
+    Labber data may contain coordinate rows in their physical sweep order, or
+    it may store an already regular X grid while keeping the signal in
+    acquisition order. Signal rows are therefore always reversed. Coordinate
+    rows are reversed only when their X direction is opposite to the first
+    usable row, avoiding a folded coordinate mesh for regular stored grids.
+    """
+    x_array = np.asarray(x_grid)
+    y_array = np.asarray(y_grid)
+    data_array = np.asarray(data_grid)
+    if x_array.ndim != 2 or y_array.ndim != 2 or data_array.ndim != 2:
+        raise ValueError('X, Y, and displayed data must all be two-dimensional.')
+    if x_array.shape != y_array.shape or x_array.shape != data_array.shape:
+        raise ValueError(
+            'X, Y, and displayed data must have matching shapes; got '
+            f'{x_array.shape}, {y_array.shape}, and {data_array.shape}.'
+        )
+
+    if acquisition_row_indices is None:
+        acquisition_rows = np.arange(x_array.shape[0], dtype=int)
+    else:
+        acquisition_rows = np.asarray(acquisition_row_indices, dtype=int)
+        if acquisition_rows.ndim != 1 or acquisition_rows.size != x_array.shape[0]:
+            raise ValueError(
+                'Acquisition row indices must contain one entry per map row.'
+            )
+
+    corrected_x = np.array(x_array, copy=True)
+    corrected_y = np.array(y_array, copy=True)
+    corrected_data = np.array(data_array, copy=True)
+    reversed_row_positions = np.flatnonzero(acquisition_rows % 2 == 1)
+    corrected_data[reversed_row_positions, :] = corrected_data[
+        reversed_row_positions, ::-1
+    ]
+
+    reference_direction = 0
+    for row_position, row in enumerate(corrected_x):
+        reference_direction = _row_direction(row)
+        if reference_direction != 0:
+            if acquisition_rows[row_position] % 2 == 1:
+                reference_direction *= -1
+            break
+
+    if reference_direction != 0:
+        for row_position in reversed_row_positions:
+            if _row_direction(corrected_x[row_position]) == -reference_direction:
+                corrected_x[row_position] = corrected_x[row_position, ::-1]
+                corrected_y[row_position] = corrected_y[row_position, ::-1]
+
+    return corrected_x, corrected_y, corrected_data
 
 
 def nearest_grid_indices(x_grid, y_grid, x_value, y_value):
@@ -385,6 +477,7 @@ class InteractiveArrayPlotter:
         self.crosshair_enabled = False
         self.interpolation_enabled = False
         self.invert_enabled = False
+        self.x_sweep_mode = tk.StringVar(master=self.root, value='normal')
         self.freeze_linecut = False
         self.linecut_position = None
         self.drawing_line = False
@@ -458,6 +551,29 @@ class InteractiveArrayPlotter:
         )
         self.auto_scale_check.pack(side=tk.TOP, pady=2)
 
+        self.x_sweep_frame = ttk.LabelFrame(
+            self.frame2,
+            text='X sweep direction',
+        )
+        self.x_sweep_frame.pack(side=tk.TOP, fill=tk.X, pady=2)
+        self.normal_x_sweep_radio = ttk.Radiobutton(
+            self.x_sweep_frame,
+            text='Normal',
+            variable=self.x_sweep_mode,
+            value='normal',
+            command=self._on_x_sweep_mode_changed,
+        )
+        self.normal_x_sweep_radio.pack(anchor=tk.W, padx=4)
+        self.alternating_x_sweep_radio = ttk.Radiobutton(
+            self.x_sweep_frame,
+            text='Alternating',
+            variable=self.x_sweep_mode,
+            value='alternating',
+            command=self._on_x_sweep_mode_changed,
+            state=(tk.DISABLED if self.single_axis_measurement else tk.NORMAL),
+        )
+        self.alternating_x_sweep_radio.pack(anchor=tk.W, padx=4)
+
         # Create a "Reset Plot" button inside the button frame
         self.reset_plot_button = ttk.Button(self.frame2, text="Plot", command=self.plot_data)
         self.reset_plot_button.pack(side=tk.TOP, fill=tk.X)
@@ -477,6 +593,25 @@ class InteractiveArrayPlotter:
         self.histogram_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True, anchor=tk.N)
         self.plot_data()
         self.canvas.mpl_connect('key_press_event', self.on_key_press)
+
+    def _alternating_x_sweep_enabled(self):
+        """Return whether the displayed map should undo serpentine X scans."""
+        return (
+            not self.single_axis_measurement
+            and self.x_sweep_mode.get() == 'alternating'
+        )
+
+    def _on_x_sweep_mode_changed(self):
+        """Reload and redraw the selected channel with the chosen X ordering."""
+        self.x_index = 0
+        self.y_index = 0
+        self.freeze_linecut = False
+        self.linecut_position = None
+        if hasattr(self, 'trace_x_index'):
+            self.trace_x_index = 0
+        if hasattr(self, 'trace_y_index'):
+            self.trace_y_index = 0
+        self.plot_data()
 
     def _capture_displayed_data_state(self, operation_name):
         """Return an independent snapshot of the currently displayed data."""
@@ -577,6 +712,7 @@ class InteractiveArrayPlotter:
 
     def plot_data(self):
         tick = time.perf_counter()
+        self._displayed_acquisition_row_indices = None
 
         # Get selected parameter values from comboboxes
         selected_display_values = [combobox.get() for combobox in self.parameter_comboboxes]
@@ -630,6 +766,9 @@ class InteractiveArrayPlotter:
             if not self.invert_enabled:
                 self.X = (np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])
                 self.nan_mask = ~np.isnan(self.X).any(axis=1)
+                self._displayed_acquisition_row_indices = np.flatnonzero(
+                    self.nan_mask
+                )
                 self.X = self.X[self.nan_mask]
                 self.Y = (np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(
                     0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
@@ -724,6 +863,19 @@ class InteractiveArrayPlotter:
             self.Y,
             self.sliced_data,
         )
+        if self._alternating_x_sweep_enabled():
+            acquisition_rows = self._displayed_acquisition_row_indices
+            if (
+                acquisition_rows is not None
+                and len(acquisition_rows) != self.X.shape[0]
+            ):
+                acquisition_rows = None
+            self.X, self.Y, self.sliced_data = correct_alternating_x_sweep(
+                self.X,
+                self.Y,
+                self.sliced_data,
+                acquisition_row_indices=acquisition_rows,
+            )
 
         if hasattr(self, 'cbar'):
             self.cbar.remove()
@@ -2981,6 +3133,17 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
             self.line_order_indeces = (self.data.trace_order).reshape(
                 np.flip(self.data.measure_dim)
             )[tuple(selected_indices)]
+            if self._alternating_x_sweep_enabled():
+                self.line_order_indeces = reverse_alternating_rows(
+                    self.line_order_indeces
+                )
+            if (
+                np.ndim(self.nan_mask) == 1
+                and len(self.nan_mask) == self.line_order_indeces.shape[0]
+            ):
+                self.line_order_indeces = self.line_order_indeces[
+                    self.nan_mask
+                ]
             trace_index = int(
                 self.line_order_indeces[
                     self.trace_y_index
