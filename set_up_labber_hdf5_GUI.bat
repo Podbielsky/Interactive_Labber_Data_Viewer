@@ -79,6 +79,7 @@ IF EXIST "%ENV_NAME%\Scripts\activate.bat" (
     copy "%~dp0source\database_manager.py" "%ENV_NAME%\Scripts"
     copy "%~dp0source\database_browser.py" "%ENV_NAME%\Scripts"
     copy "%~dp0source\interactive_plotting_tools.py" "%ENV_NAME%\Scripts"
+    copy "%~dp0source\plot_style.py" "%ENV_NAME%\Scripts"
     copy "%~dp0source\fitting_tools.py" "%ENV_NAME%\Scripts"
     copy "%~dp0source\Data_analysis_and_transforms.py" "%ENV_NAME%\Scripts"
     copy "%~dp0source\custom_cmap.py" "%ENV_NAME%\Scripts"

@@ -104,3 +104,20 @@ change in v0.4.8
   raised them after map redraws and each scheduled cursor update
 - prevented persistent/ghost linecuts by using an opaque, theme-matched backing
   for the two TkAgg canvases whose animated artists are updated with blitting
+- added persistent plot-style preferences for the preferred map colormap,
+  shared crosshair-linecut/histogram color, and extracted-linecut color cycle
+- added a reusable Plot Colors dialog to the main Style menu and map plotters,
+  including live color-cycle previews and restore-default controls
+- added standard Matplotlib colors and palettes together with Viridis, Plasma,
+  Inferno, Cividis, BiMap, NeonPiCy, RedMap, and BlueMap-inspired choices
+- made colormap changes in the map plotter update the saved default and added a
+  live, persistent color-cycle selector to the extracted-linecut plotter
+- applied plot-style changes to already-open map, histogram, crosshair-linecut,
+  and extracted-linecut artists while retaining safe defaults for older or
+  partially edited preferences.json files
+- added plot_style.py to both the Windows and macOS/Linux installer manifests
+  so fresh installations include the plotting-preference module
+- applied the preferred colormap to database-browser map previews and refresh
+  an already-open map preview when the global plotting style changes
+- added extracted-linecut cycles generated from every installed standard
+  ttkbootstrap theme's semantic color palette

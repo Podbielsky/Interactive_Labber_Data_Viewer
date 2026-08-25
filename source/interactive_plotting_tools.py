@@ -38,6 +38,15 @@ from fitting_tools import (
     default_initial_value,
     format_fit_result,
 )
+from plot_style import (
+    AVAILABLE_COLORMAPS,
+    COLOR_CYCLE_OPTIONS,
+    DEFAULT_PLOT_STYLE,
+    get_color_cycle,
+    normalize_plot_style,
+    open_plot_style_dialog,
+    resolve_plot_color,
+)
 neon_cmap = make_neon_cyclic_colormap()
 bi_map = make_bi_colormap() # take out
 half_red_map = make_half_red_map()
@@ -389,9 +398,19 @@ class InteractiveArrayPlotter:
     if the dataset contains trace information.
 
     """
-    def __init__(self, root, hdf5data, figure=None, ax=None):
+    def __init__(
+        self,
+        root,
+        hdf5data,
+        figure=None,
+        ax=None,
+        plot_style=None,
+        plot_style_change_callback=None,
+    ):
         self.root = root
         self.root.title("Interactive Array Plotter")
+        self.plot_style = normalize_plot_style(plot_style)
+        self.plot_style_change_callback = plot_style_change_callback
 
         # Initialize attributes
         self.data = hdf5data
@@ -483,6 +502,13 @@ class InteractiveArrayPlotter:
         self.menubar.add_cascade(label="Tools", menu=self.tool_menu)
         self.tool_menu.add_command(label="2-D FFT Filter", command=self.open_2d_fft_filter)
 
+        self.style_menu = ttk.Menu(self.menubar, tearoff=0)
+        self.style_menu.add_command(
+            label='Plot Colors…',
+            command=self.open_plot_style_settings,
+        )
+        self.menubar.add_cascade(label='Style', menu=self.style_menu)
+
         # Create Help Menu
         self.help_menu = ttk.Menu(self.menubar, tearoff=0)
         self.help_menu.add_command(label="About", command=self.show_about)
@@ -535,9 +561,7 @@ class InteractiveArrayPlotter:
         self.picked_line = None
 
         # Define interactive button options
-        self.colormaps = ['viridis', 'plasma', 'inferno', 'magma', 'cividis', 'twilight', 'twilight_shifted',
-                          'BlueMap', 'RedMap' ,'coolwarm', 'Spectral',
-                          'gnuplot', 'NeonPiCy', 'BiMap']
+        self.colormaps = list(AVAILABLE_COLORMAPS)
         self.bg_methods = ['Polynomial', 'Median Difference', 'Mean of Lines', 'Relation Parameters',
                            'Subtract Trace Average']
         self.relation_parameter_entry_list = []
@@ -659,7 +683,11 @@ class InteractiveArrayPlotter:
         # Create a combobox for colormap selection
         self.colormap_combobox = ttk.Combobox(self.frame2, values=self.colormaps, state='readonly', width=10)
         self.colormap_combobox.pack(side=tk.BOTTOM, padx=5, pady=5)
-        self.colormap_combobox.set(self.colormaps[0])  # Set the default colormap
+        self.colormap_combobox.set(self.plot_style['preferred_colormap'])
+        self.colormap_combobox.bind(
+            '<<ComboboxSelected>>',
+            self._on_preferred_colormap_selected,
+        )
 
         # Create a combobox for data selection
         self.data_combobox = ttk.Combobox(self.frame2, values=self.name_data, state='readonly', width=20)
@@ -765,6 +793,94 @@ class InteractiveArrayPlotter:
             not self.single_axis_measurement
             and self.x_sweep_mode.get() == 'alternating'
         )
+
+    def _current_plot_line_color(self):
+        """Return the shared crosshair-linecut and histogram color."""
+        return resolve_plot_color(
+            self.plot_style['crosshair_histogram_color']
+        )
+
+    def _commit_plot_style(self, plot_style):
+        """Persist a style through the application or apply it locally."""
+        normalized_style = normalize_plot_style(plot_style)
+        if self.plot_style_change_callback is None:
+            self.apply_plot_style(normalized_style)
+            return normalized_style
+        try:
+            saved_style = self.plot_style_change_callback(normalized_style)
+        except (OSError, ValueError) as error:
+            self.apply_plot_style(normalized_style)
+            messagebox.showwarning(
+                'Plot Style Not Saved',
+                f'The plot style was applied but could not be remembered:\n{error}',
+                parent=self.root,
+            )
+            return normalized_style
+        return normalize_plot_style(saved_style or normalized_style)
+
+    def open_plot_style_settings(self):
+        """Edit persistent plot colors from inside the map plotter."""
+        return open_plot_style_dialog(
+            self.root,
+            self.plot_style,
+            self._commit_plot_style,
+        )
+
+    def _on_preferred_colormap_selected(self, _event=None):
+        selected_style = dict(self.plot_style)
+        selected_style['preferred_colormap'] = self.colormap_combobox.get()
+        self._commit_plot_style(selected_style)
+
+    def _on_extracted_linecut_cycle_selected(self, cycle_name):
+        selected_style = dict(self.plot_style)
+        selected_style['extracted_linecut_color_cycle'] = cycle_name
+        self._commit_plot_style(selected_style)
+
+    def apply_plot_style(self, plot_style):
+        """Apply validated plotting colors to all live artists in this window."""
+        normalized_style = normalize_plot_style(plot_style)
+        previous_colormap = self.plot_style.get('preferred_colormap')
+        self.plot_style = normalized_style
+
+        if hasattr(self, 'colormap_combobox'):
+            self.colormap_combobox.set(
+                normalized_style['preferred_colormap']
+            )
+
+        line_color = self._current_plot_line_color()
+        for artist_name in (
+            'horizontal_linecut_artist',
+            'vertical_linecut_artist',
+        ):
+            artist = getattr(self, artist_name, None)
+            if artist is not None:
+                artist.set_color(line_color)
+
+        if (
+            hasattr(self, 'sliced_data')
+            and self.sliced_data is not None
+            and hasattr(self, 'histogram_canvas')
+        ):
+            self.update_histogramm()
+
+        if (
+            previous_colormap != normalized_style['preferred_colormap']
+            and getattr(self, 'display_sliced_data', None) is not None
+        ):
+            self.update_pcolormesh(self.vmin, self.vmax)
+
+        if (
+            self.crosshair_enabled
+            and self._current_linecut_request is not None
+        ):
+            self._blit_current_linecuts()
+
+        linecut_plotter = getattr(self, 'linecut_plotter', None)
+        if linecut_plotter is not None:
+            linecut_plotter.set_color_cycle(
+                normalized_style['extracted_linecut_color_cycle']
+            )
+        return normalized_style
 
     def _on_x_sweep_mode_changed(self):
         """Reload and redraw the selected channel with the chosen X ordering."""
@@ -1593,7 +1709,7 @@ class InteractiveArrayPlotter:
         (self.horizontal_linecut_artist,) = self.ax_hline.plot(
             [],
             [],
-            color='#1f77b4',
+            color=self._current_plot_line_color(),
             animated=True,
         )
         self.horizontal_linecut_cursor = self.ax_hline.axvline(
@@ -1614,7 +1730,7 @@ class InteractiveArrayPlotter:
         (self.vertical_linecut_artist,) = self.ax_vline.plot(
             [],
             [],
-            color='#1f77b4',
+            color=self._current_plot_line_color(),
             animated=True,
         )
         self.vertical_linecut_cursor = self.ax_vline.axhline(
@@ -3322,7 +3438,15 @@ class InteractiveArrayPlotter:
                         if (not hasattr(self, 'linecut_plotter') or
                                 not hasattr(self.linecut_plotter, 'root') or
                                 not self.linecut_plotter.root.winfo_exists()):
-                            self.linecut_plotter = UtilityLinePlotter(self.root)
+                            self.linecut_plotter = UtilityLinePlotter(
+                                self.root,
+                                color_cycle_name=self.plot_style[
+                                    'extracted_linecut_color_cycle'
+                                ],
+                                color_cycle_change_callback=(
+                                    self._on_extracted_linecut_cycle_selected
+                                ),
+                            )
                             self.linecut_plotter.root.protocol(
                                 "WM_DELETE_WINDOW", self.on_linecut_window_close
                             )
@@ -3749,7 +3873,12 @@ class InteractiveArrayPlotter:
 
     def update_histogramm(self):
         self.histogram_ax.clear()
-        self.histogram_ax.hist(self.sliced_data.flatten(), bins=60, color='blue', alpha=0.7)
+        self.histogram_ax.hist(
+            self.sliced_data.flatten(),
+            bins=60,
+            color=self._current_plot_line_color(),
+            alpha=0.7,
+        )
         self.histogram_ax.set_yticklabels([])
         self.histogram_ax.set_xticklabels([])
 
@@ -3808,7 +3937,7 @@ class InteractiveArrayPlotter:
         self.histogram_ax.clear()
 
         # Reset UI elements to their default states
-        self.colormap_combobox.set(self.colormaps[0])
+        self.colormap_combobox.set(self.plot_style['preferred_colormap'])
         self.data_combobox.set(self.name_data[0]) if self.name_data else None
         for combobox in self.parameter_comboboxes:
             if combobox['values']:
@@ -3850,7 +3979,13 @@ class InteractiveArrayPlotter:
 
 
 class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
-    def __init__(self, root, hdf5data):
+    def __init__(
+        self,
+        root,
+        hdf5data,
+        plot_style=None,
+        plot_style_change_callback=None,
+    ):
 
         self.trace_x_index = 0
         self.trace_y_index = 0
@@ -3871,7 +4006,14 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
         self.ax = self.figure.add_subplot(111)
         self.trace_figure = Figure(figsize=(8, 2.2), dpi=100)
         self.line_ax = self.trace_figure.add_subplot(111)
-        super().__init__(root, hdf5data, self.figure, self.ax)
+        super().__init__(
+            root,
+            hdf5data,
+            self.figure,
+            self.ax,
+            plot_style=plot_style,
+            plot_style_change_callback=plot_style_change_callback,
+        )
         self.canvas.mpl_connect('button_press_event', self.on_right_click)
         self.file_menu.add_command(label="Save displayed Trace as NumPy array", command=self.save_trace)
 
@@ -4034,9 +4176,20 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
 
 
 class InteractiveTimeTraceMapPlotter(InteractiveArrayPlotter):
-    def __init__(self, root, hdf5data):
+    def __init__(
+        self,
+        root,
+        hdf5data,
+        plot_style=None,
+        plot_style_change_callback=None,
+    ):
 
-        super().__init__(root, hdf5data)
+        super().__init__(
+            root,
+            hdf5data,
+            plot_style=plot_style,
+            plot_style_change_callback=plot_style_change_callback,
+        )
 
 
 class FitConfigurationPanel:
@@ -4552,7 +4705,12 @@ class TracesFitter:
 
 
 class UtilityLinePlotter:
-    def __init__(self, master=None):
+    def __init__(
+        self,
+        master=None,
+        color_cycle_name=None,
+        color_cycle_change_callback=None,
+    ):
         """
         Initialize a utility plotter for line cuts.
 
@@ -4569,6 +4727,12 @@ class UtilityLinePlotter:
         # Store line cut data as list of tuples (x, y, label)
         self.data = []
         self.selected_line_idx = None
+        self.color_cycle_name = (
+            color_cycle_name
+            if color_cycle_name in COLOR_CYCLE_OPTIONS
+            else DEFAULT_PLOT_STYLE['extracted_linecut_color_cycle']
+        )
+        self.color_cycle_change_callback = color_cycle_change_callback
 
         # Create the figure and axis for plotting
         self.fig = plt.Figure(figsize=(6, 5), dpi=100)
@@ -4642,6 +4806,47 @@ class UtilityLinePlotter:
                                             variable=self.show_legend_var,
                                             command=self.update_plot)
         self.legend_check.pack(anchor=tk.W, padx=5, pady=2)
+
+        ttk.Label(options_frame, text='Color cycle:').pack(
+            anchor=tk.W,
+            padx=5,
+            pady=(8, 0),
+        )
+        self.color_cycle_combobox = ttk.Combobox(
+            options_frame,
+            values=tuple(COLOR_CYCLE_OPTIONS),
+            state='readonly',
+            width=24,
+        )
+        self.color_cycle_combobox.set(self.color_cycle_name)
+        self.color_cycle_combobox.pack(
+            fill=tk.X,
+            padx=5,
+            pady=(2, 5),
+        )
+        self.color_cycle_combobox.bind(
+            '<<ComboboxSelected>>',
+            self._on_color_cycle_selected,
+        )
+
+    def _on_color_cycle_selected(self, _event=None):
+        """Apply and persist a cycle chosen in the linecut plotter."""
+        cycle_name = self.color_cycle_combobox.get()
+        self.set_color_cycle(cycle_name)
+        if self.color_cycle_change_callback is not None:
+            self.color_cycle_change_callback(cycle_name)
+
+    def set_color_cycle(self, cycle_name):
+        """Change the extracted-linecut palette and redraw existing curves."""
+        if cycle_name not in COLOR_CYCLE_OPTIONS:
+            cycle_name = DEFAULT_PLOT_STYLE[
+                'extracted_linecut_color_cycle'
+            ]
+        self.color_cycle_name = cycle_name
+        if hasattr(self, 'color_cycle_combobox'):
+            self.color_cycle_combobox.set(cycle_name)
+        if hasattr(self, 'canvas'):
+            self.update_plot()
 
     def add_linecut(self, x_data, y_data, label=None):
         """
@@ -4935,10 +5140,10 @@ class UtilityLinePlotter:
         """Update the plot with current data and settings."""
         self.ax.clear()
 
-        colors = plt.cm.tab10.colors
+        line_colors = get_color_cycle(self.color_cycle_name)
 
         for i, (x, y, label) in enumerate(self.data):
-            color = colors[i % len(colors)]
+            color = line_colors[i % len(line_colors)]
             if i == self.selected_line_idx:
                 # Highlight selected line
                 self.ax.plot(x, y, label=label, color=color, linewidth=2.5)

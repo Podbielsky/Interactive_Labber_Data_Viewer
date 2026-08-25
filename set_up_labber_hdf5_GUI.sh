@@ -49,6 +49,7 @@ LABBER_APPLICATION_FILES=(
     "database_manager.py"
     "database_browser.py"
     "interactive_plotting_tools.py"
+    "plot_style.py"
     "fitting_tools.py"
     "Data_analysis_and_transforms.py"
     "custom_cmap.py"

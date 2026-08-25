@@ -97,6 +97,36 @@ Changing the interface style
 - Choose a theme from the Light or Dark submenu.
 - The selected theme is applied immediately to all open viewer windows.
 - The selected theme is remembered and restored the next time the viewer starts.
+- Choose Style > Plot Colors... in either the file viewer or a map plotter to
+  set the preferred map colormap, the shared crosshair-linecut/histogram color,
+  and the color cycle used by extracted linecuts. Saving applies the selection
+  to open map windows and stores it for future sessions.
+- Selecting a colormap directly in a map plotter also updates the saved
+  preferred colormap. The extracted-linecut window has a Color cycle selector
+  that changes existing curves and saves the selection.
+- Database-browser map previews use the same preferred colormap. Changing the
+  preference also redraws a map preview in an already-open browser; one-axis
+  database previews remain line plots.
+- Color choices include the standard Matplotlib Tableau colors and palettes,
+  together with colors and cycles inspired by Viridis, Plasma, Inferno,
+  Cividis, BiMap, NeonPiCy, RedMap, and BlueMap. The dialog contains a preview
+  of the shared line color and selected cycle.
+- The extracted-linecut cycle list also contains one entry for every standard
+  ttkbootstrap interface theme installed with the application. These cycles
+  are generated from each theme's primary, success, info, warning, danger, and
+  secondary colors, so choices such as Cosmo, Minty, Darkly, Superhero, Solar,
+  Cyborg, and Vapor match their corresponding GUI theme.
+- These settings are stored in the user-local preferences.json as, for example:
+
+  "plot_style": {
+    "preferred_colormap": "BiMap",
+    "crosshair_histogram_color": "NeonPiCy pink",
+    "extracted_linecut_color_cycle": "Viridis inspired"
+  }
+
+  A manually edited crosshair_histogram_color may also be any valid Matplotlib
+  color string or hexadecimal color. Invalid or removed values fall back to
+  their defaults without preventing the rest of the preferences from loading.
 
 
 Opening HDF5 and NPZ files with drag and drop

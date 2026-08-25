@@ -10,6 +10,7 @@ import numpy as np
 import ttkbootstrap as ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+from plot_style import normalize_plot_style
 
 class DatabaseBrowser:
     """Display the database directory tree, previews, stars, and comments."""
@@ -23,11 +24,13 @@ class DatabaseBrowser:
         open_file_callback,
         icon_callback=None,
         on_close=None,
+        plot_style=None,
     ):
         self.parent = parent
         self.database = database
         self.open_file_callback = open_file_callback
         self.on_close_callback = on_close
+        self.plot_style = normalize_plot_style(plot_style)
         self.window = ttk.Toplevel(parent)
         self.window.title('Browse Measurement Database')
         self.window.geometry('1100x720')
@@ -39,6 +42,7 @@ class DatabaseBrowser:
         self.tree_items_by_measurement = {}
         self.current_measurement_id = None
         self.previewed_measurement_id = None
+        self.current_preview = None
         self.preview_request_number = 0
         self.keyboard_preview_after_id = None
         self.preview_loading = False
@@ -313,6 +317,7 @@ class DatabaseBrowser:
         # an arrow key does not start one HDF5 read for every repeated keypress.
         self.preview_request_number += 1
         self.previewed_measurement_id = None
+        self.current_preview = None
         self.preview_loading = False
         self._cancel_keyboard_preview()
         self.status_variable.set(f'Preparing preview for {record.file_name}…')
@@ -346,6 +351,7 @@ class DatabaseBrowser:
         """Reset controls when no measurement is currently available."""
         self.current_measurement_id = None
         self.previewed_measurement_id = None
+        self.current_preview = None
         self.measurement_title.set('No measurement selected')
         self.measurement_details.set('')
         self.starred_variable.set(False)
@@ -365,6 +371,7 @@ class DatabaseBrowser:
         request_number = self.preview_request_number
         self.preview_loading = True
         self.previewed_measurement_id = None
+        self.current_preview = None
         self.status_variable.set(f'Loading preview for {record.file_name}…')
         self.preview_figure.clear()
         preview_axis = self.preview_figure.add_subplot(111)
@@ -467,7 +474,7 @@ class DatabaseBrowser:
                 aspect='auto',
                 interpolation='nearest',
                 extent=self._preview_extent(preview),
-                cmap='viridis',
+                cmap=self.plot_style['preferred_colormap'],
             )
             self.preview_axis.set_xlabel(preview.x_label)
             self.preview_axis.set_ylabel(preview.y_label)
@@ -477,12 +484,33 @@ class DatabaseBrowser:
             )
         self.preview_canvas.draw_idle()
         self.previewed_measurement_id = measurement_id
+        self.current_preview = preview
         self.preview_loading = False
         record = self.records.get(measurement_id)
         if record is not None:
             self.status_variable.set(
                 'Preview loaded. Click the measurement again to open it.'
             )
+
+    def set_plot_style(self, plot_style):
+        """Apply a new preferred colormap to the current map preview."""
+        normalized_style = normalize_plot_style(plot_style)
+        colormap_changed = (
+            normalized_style['preferred_colormap']
+            != self.plot_style['preferred_colormap']
+        )
+        self.plot_style = normalized_style
+        if (
+            colormap_changed
+            and self.current_preview is not None
+            and self.previewed_measurement_id is not None
+            and not self.current_preview.is_linecut
+        ):
+            self._display_preview(
+                self.previewed_measurement_id,
+                self.current_preview,
+            )
+        return normalized_style
 
     def _display_preview_error(self, measurement_id, error):
         """Show preview errors without closing the database browser."""
@@ -500,6 +528,7 @@ class DatabaseBrowser:
         self.preview_axis.set_axis_off()
         self.preview_canvas.draw_idle()
         self.previewed_measurement_id = measurement_id
+        self.current_preview = None
         self.preview_loading = False
         self.status_variable.set('The selected measurement could not be previewed.')
 

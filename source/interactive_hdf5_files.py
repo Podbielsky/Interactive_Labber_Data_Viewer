@@ -1,6 +1,7 @@
 # Version 0.4.7
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
+import copy
 import datetime
 import json
 import queue
@@ -30,6 +31,11 @@ from creating_hdf5_files_from_npy_files import (
 )
 from database_browser import DatabaseBrowser
 from database_manager import MeasurementDatabase
+from plot_style import (
+    DEFAULT_PLOT_STYLE,
+    normalize_plot_style,
+    open_plot_style_dialog,
+)
 
 import traceback
 
@@ -54,6 +60,7 @@ PREFERENCES_DIRECTORY_NAME = 'Labber HDF5 Viewer'
 DEFAULT_APPLICATION_PREFERENCES = {
     'theme': DEFAULT_THEME,
     'database_folder': None,
+    'plot_style': dict(DEFAULT_PLOT_STYLE),
 }
 
 
@@ -105,15 +112,18 @@ def load_application_preferences():
         with open(get_preferences_path(), 'r', encoding='utf-8-sig') as preferences_file:
             preferences = json.load(preferences_file)
     except (OSError, UnicodeError, json.JSONDecodeError):
-        return dict(DEFAULT_APPLICATION_PREFERENCES)
+        return copy.deepcopy(DEFAULT_APPLICATION_PREFERENCES)
 
     if not isinstance(preferences, dict):
-        return dict(DEFAULT_APPLICATION_PREFERENCES)
+        return copy.deepcopy(DEFAULT_APPLICATION_PREFERENCES)
 
-    merged_preferences = dict(DEFAULT_APPLICATION_PREFERENCES)
+    merged_preferences = copy.deepcopy(DEFAULT_APPLICATION_PREFERENCES)
     merged_preferences.update(preferences)
     if not isinstance(merged_preferences.get('database_folder'), (str, type(None))):
         merged_preferences['database_folder'] = None
+    merged_preferences['plot_style'] = normalize_plot_style(
+        merged_preferences.get('plot_style')
+    )
     return merged_preferences
 
 
@@ -144,6 +154,56 @@ def save_application_preferences(updates):
 def save_application_style(theme_name):
     """Persist the selected theme in the current user's preferences."""
     save_application_preferences({'theme': theme_name})
+
+
+def save_application_plot_style(plot_style):
+    """Validate and persist plotting colors in the user preferences."""
+    normalized_style = normalize_plot_style(plot_style)
+    save_application_preferences({'plot_style': normalized_style})
+    return normalized_style
+
+
+def change_application_plot_style(root, plot_style):
+    """Persist plotting colors and apply them to all open plotting views."""
+    normalized_style = save_application_plot_style(plot_style)
+    live_plotters = []
+    for plotter in array_plotters:
+        try:
+            plotter_is_open = bool(plotter.root.winfo_exists())
+        except (AttributeError, tk.TclError):
+            plotter_is_open = False
+        if not plotter_is_open:
+            continue
+        live_plotters.append(plotter)
+        plotter.apply_plot_style(normalized_style)
+    array_plotters[:] = live_plotters
+
+    active_browsers = []
+    for browser in getattr(root, '_labber_database_browsers', []):
+        try:
+            browser_is_open = (
+                not browser.closed and bool(browser.window.winfo_exists())
+            )
+        except (AttributeError, tk.TclError):
+            browser_is_open = False
+        if not browser_is_open:
+            continue
+        active_browsers.append(browser)
+        browser.set_plot_style(normalized_style)
+    root._labber_database_browsers = active_browsers
+    return normalized_style
+
+
+def open_application_plot_style_dialog(root):
+    """Edit the persistent plot style from the application's Style menu."""
+    return open_plot_style_dialog(
+        root,
+        load_application_preferences()['plot_style'],
+        lambda selected_style: change_application_plot_style(
+            root,
+            selected_style,
+        ),
+    )
 
 
 def ensure_application_preference_defaults():
@@ -214,6 +274,11 @@ def add_style_menu(root, menubar):
 
     style_menu.add_cascade(label='Light', menu=light_menu)
     style_menu.add_cascade(label='Dark', menu=dark_menu)
+    style_menu.add_separator()
+    style_menu.add_command(
+        label='Plot Colors…',
+        command=lambda: open_application_plot_style_dialog(root),
+    )
     menubar.add_cascade(label='Style', menu=style_menu)
 
     # Keep the Tk variable alive for as long as the application window exists.
@@ -1037,6 +1102,7 @@ def open_database_browser(root):
         open_file_callback,
         icon_callback=set_application_icon,
         on_close=unregister_browser,
+        plot_style=load_application_preferences()['plot_style'],
     )
     root._labber_database_browsers.append(browser)
     return browser
@@ -1957,7 +2023,14 @@ def plot_array(hdf5Data, root):
     hdf5Data.set_data()
     hdf5Data.set_measure_dim()
     hdf5Data.set_measure_data_and_axis()
-    plotter = InteractiveArrayPlotter(new_window, hdf5Data)
+    plotter = InteractiveArrayPlotter(
+        new_window,
+        hdf5Data,
+        plot_style=load_application_preferences()['plot_style'],
+        plot_style_change_callback=lambda selected_style: (
+            change_application_plot_style(root, selected_style)
+        ),
+    )
     array_plotters.append(plotter)
 
 
@@ -1969,7 +2042,14 @@ def plot_array_with_trace_data(hdf5Data, root):
     hdf5Data.set_measure_data_and_axis()
     hdf5Data.trace_loading_with_referance()
     hdf5Data.set_traces_dt()
-    plotter = InteractiveArrayAndLinePlotter(new_window, hdf5Data)
+    plotter = InteractiveArrayAndLinePlotter(
+        new_window,
+        hdf5Data,
+        plot_style=load_application_preferences()['plot_style'],
+        plot_style_change_callback=lambda selected_style: (
+            change_application_plot_style(root, selected_style)
+        ),
+    )
     array_plotters.append(plotter)
 
 
