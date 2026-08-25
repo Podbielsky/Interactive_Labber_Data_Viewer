@@ -189,6 +189,42 @@ Displaying maps acquired with alternating X sweeps
   row. Normal is the default and one-axis measurements keep this setting.
 
 
+Map rendering, crosshairs, and numerical precision
+-->
+- The map viewer retains the active X, Y, and signal calculation arrays at
+  float64 precision. Filters, derivatives, integrations, linecut extraction,
+  ROI operations, undo states, and displayed-data exports use these full-
+  resolution arrays.
+- The color map is rendered from separate float32 arrays. They are regularly
+  sampled to approximately one data point per available map-canvas pixel and
+  are regenerated after an explicit data operation or a debounced window
+  resize. The first and last source rows and columns are always retained.
+- The horizontal and vertical crosshair linecuts have independent Matplotlib
+  canvases. Crosshair motion retains only the newest requested position and
+  updates the cursor, data-cell lookup, and persistent line artists together at
+  a maximum rate of approximately 30 Hz. Each displayed line is limited to 512
+  points and is blitted over cached axes.
+- "Fast crosshair" is enabled by default in the controls to the right of the
+  plot, above the X-sweep selection. It uses the operating-system crosshair
+  cursor without moving full-width guide lines over the map bitmap. Clear this
+  checkbox to show the horizontal and vertical guide lines; those lines remain
+  rate-limited and are kept above the color map after redraws. Press S while
+  the map has keyboard focus to freeze or unfreeze the current crosshair and
+  linecuts.
+- ROI selection and new-line drawing use rate-limited native canvas outlines
+  while the pointer moves. Their permanent Matplotlib artists are created only
+  after the second click, so motion does not repeatedly redraw the color map.
+- Maps continue to use pcolormesh. Expensive per-motion QuadMesh hit-testing is
+  disabled, while toolbar coordinate reporting and pan/zoom remain available.
+- Non-blitted Matplotlib figures use transparent figure and axes patches. The
+  two fast linecut canvases instead use an opaque background matched to the
+  active ttk theme: TkAgg needs those opaque cached pixels to erase the previous
+  blitted curve without leaving trails. The result still blends into the GUI
+  instead of showing a separate white plotting canvas.
+- In the map-with-traces viewer, the selected time trace also uses an
+  independent canvas, so changing the selected trace does not repaint the map.
+
+
 Checking for updates
 -->
 - The viewer silently checks the repository's main branch shortly after startup.

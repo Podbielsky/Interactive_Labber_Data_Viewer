@@ -76,3 +76,31 @@ change in v0.4.8
   serpentine row correction for coordinates, map data, and trace selection
 - fixed grid-orientation detection for alternating coordinate rows so that
   serpentine maps are not incorrectly transposed before row correction
+- separated the main map, horizontal crosshair linecut, vertical crosshair
+  linecut, and optional time-trace plots into independent canvases
+- replaced Matplotlib crosshair artists with lightweight Tk canvas overlays so
+  mouse movement no longer redraws the main color map
+- retained authoritative calculation arrays as float64 while rendering from
+  separate float32 arrays downsampled to the current map-canvas pixel size
+- added debounced adaptive resampling after map-window resizing
+- fully decoupled cursor motion from linecut rendering by coalescing requests,
+  rate-limiting updates, and blitting persistent line artists over cached axes
+- coalesced the complete crosshair pipeline so guide movement, cell lookup, and
+  linecut updates consume only the newest pointer position at approximately
+  30 Hz
+- added a default Fast crosshair mode that uses the native system cursor and
+  avoids moving guide lines over the large map bitmap
+- disabled Matplotlib QuadMesh mouseover hit-testing, which previously scanned
+  the pcolormesh during every toolbar motion event on large datasets
+- replaced live ROI and new-line Matplotlib redraws with coalesced native canvas
+  previews and commit their permanent artists only when selection finishes
+- fixed native crosshair and interaction overlays being covered by the TkAgg
+  color-map image after a Matplotlib redraw
+- moved the Fast crosshair checkbox from the toolbar into the right-side plot
+  controls beside the histogram and X-sweep settings
+- made non-blitted Matplotlib figure and axes backgrounds transparent and
+  matched their Tk canvases and axis details to the active application theme
+- added a high-contrast outline to the full crosshair guides and explicitly
+  raised them after map redraws and each scheduled cursor update
+- prevented persistent/ghost linecuts by using an opaque, theme-matched backing
+  for the two TkAgg canvases whose animated artists are updated with blitting

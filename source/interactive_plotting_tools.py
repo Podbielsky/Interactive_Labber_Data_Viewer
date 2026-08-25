@@ -49,6 +49,55 @@ plt.register_cmap(name='NeonPiCy', cmap=neon_cmap)
 rc('pdf', fonttype=42)
 
 
+def configure_transparent_matplotlib_canvas(
+    figure,
+    canvas,
+    opaque_for_blitting=False,
+):
+    """Blend an embedded Matplotlib figure into the active ttk theme."""
+    style = ttk.Style()
+    background = (
+        style.lookup('TFrame', 'background')
+        or style.lookup('.', 'background')
+        or 'white'
+    )
+    foreground = (
+        style.lookup('TLabel', 'foreground')
+        or style.lookup('.', 'foreground')
+        or 'black'
+    )
+
+    # Keep newly created axes and axes reset by ``clear()`` transparent and
+    # readable in the current light or dark ttkbootstrap theme.
+    matplotlib.rcParams['figure.facecolor'] = 'none'
+    matplotlib.rcParams['axes.facecolor'] = 'none'
+    matplotlib.rcParams['axes.edgecolor'] = foreground
+    matplotlib.rcParams['axes.labelcolor'] = foreground
+    matplotlib.rcParams['text.color'] = foreground
+    matplotlib.rcParams['xtick.color'] = foreground
+    matplotlib.rcParams['ytick.color'] = foreground
+
+    figure.patch.set_facecolor(background if opaque_for_blitting else 'none')
+    figure.patch.set_alpha(1.0 if opaque_for_blitting else 0.0)
+    for axis in figure.axes:
+        axis.set_facecolor(background if opaque_for_blitting else 'none')
+        axis.patch.set_alpha(1.0 if opaque_for_blitting else 0.0)
+        axis.tick_params(axis='both', colors=foreground)
+        axis.xaxis.label.set_color(foreground)
+        axis.yaxis.label.set_color(foreground)
+        axis.title.set_color(foreground)
+        for spine in axis.spines.values():
+            spine.set_color(foreground)
+
+    # Tk canvases cannot inherit a truly transparent widget background. Match
+    # it to the ttk frame beneath the alpha-enabled Agg image instead.
+    canvas.get_tk_widget().configure(
+        background=background,
+        highlightthickness=0,
+        borderwidth=0,
+    )
+
+
 def _normalized_grid_variation(grid, axis):
     """Measure coordinate variation along one grid axis independent of units."""
     finite_values = np.asarray(grid, dtype=float)
@@ -223,6 +272,7 @@ class InteractiveSlicePlotter:
         self.ax = self.fig.add_subplot(111)
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.root)
+        configure_transparent_matplotlib_canvas(self.fig, self.canvas)
         self.canvas_widget = self.canvas.get_tk_widget()
         self.canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
@@ -279,6 +329,7 @@ class InteractiveHistogramPlotter:
     def create_widgets(self):
         self.fig, self.ax = plt.subplots()
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.root)
+        configure_transparent_matplotlib_canvas(self.fig, self.canvas)
         self.canvas_widget = self.canvas.get_tk_widget()
         self.canvas_widget.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
@@ -375,10 +426,14 @@ class InteractiveArrayPlotter:
         self.auto_scale_factor = 2.5
         self.data_operation_history = deque(maxlen=5)
 
-        #ROI attributes
+        # ROI selection and its lightweight, coalesced canvas preview.
         self.roi_mode = False
         self.roi_corners = []  # Store corners of the ROI as [(x1, y1), (x2, y2)]
         self.current_roi_patch = None  # Current ROI rectangle
+        self.roi_preview_item = None
+        self._pending_roi_preview = None
+        self._roi_preview_after_id = None
+        self._overlay_update_interval_ms = 33
 
         # Lever-Arm attributes
         self.lever_arm_mode = 'Double'
@@ -439,12 +494,39 @@ class InteractiveArrayPlotter:
         else:
             self.figure, self.ax = figure, ax
 
-        self.ax_vline = self.figure.add_axes([0.94, 0.12, 0.05, 0.75])  # Adjusted position and size
-        self.ax_hline = self.figure.add_axes([0.12, 0.94, 0.62, 0.05])  # Adjusted position and size
-
-        # Hide the additional axes initially
+        # The crosshair linecuts use independent figures and Tk canvases. This
+        # keeps their frequent redraws away from the comparatively expensive
+        # color-map canvas.
+        self.horizontal_linecut_figure = Figure(figsize=(6, 1.2), dpi=100)
+        self.ax_hline = self.horizontal_linecut_figure.add_subplot(111)
+        self.vertical_linecut_figure = Figure(figsize=(1.6, 5), dpi=100)
+        self.ax_vline = self.vertical_linecut_figure.add_subplot(111)
         self.ax_vline.set_visible(False)
         self.ax_hline.set_visible(False)
+
+        self.plot_area_frame = ttk.Frame(self.root)
+        self.horizontal_linecut_frame = ttk.Frame(
+            self.plot_area_frame,
+            height=120,
+        )
+        self.map_frame = ttk.Frame(self.plot_area_frame)
+        self.vertical_linecut_frame = ttk.Frame(
+            self.plot_area_frame,
+            width=160,
+        )
+        self.plot_area_frame.columnconfigure(0, weight=1)
+        self.plot_area_frame.columnconfigure(1, weight=0)
+        self.plot_area_frame.rowconfigure(0, weight=0)
+        self.plot_area_frame.rowconfigure(1, weight=1)
+        self.horizontal_linecut_frame.grid(
+            row=0,
+            column=0,
+            sticky=tk.EW,
+        )
+        self.map_frame.grid(row=1, column=0, sticky=tk.NSEW)
+        self.vertical_linecut_frame.grid(row=1, column=1, sticky=tk.NS)
+        self.horizontal_linecut_frame.grid_remove()
+        self.vertical_linecut_frame.grid_remove()
 
         # Create a new figure for the histogram
         self.histogram_fig, self.histogram_ax = plt.subplots(figsize=(3.5, 1.5))
@@ -462,17 +544,58 @@ class InteractiveArrayPlotter:
         self.roi_cut_entry_list = []
         self.drawn_lines_list = []
         self.linecut_settings_list = []
-        self.canvas = FigureCanvasTkAgg(self.figure, master=self.root)
+        self.canvas = FigureCanvasTkAgg(self.figure, master=self.map_frame)
+        self.horizontal_linecut_canvas = FigureCanvasTkAgg(
+            self.horizontal_linecut_figure,
+            master=self.horizontal_linecut_frame,
+        )
+        self.vertical_linecut_canvas = FigureCanvasTkAgg(
+            self.vertical_linecut_figure,
+            master=self.vertical_linecut_frame,
+        )
+        configure_transparent_matplotlib_canvas(self.figure, self.canvas)
+        configure_transparent_matplotlib_canvas(
+            self.horizontal_linecut_figure,
+            self.horizontal_linecut_canvas,
+            opaque_for_blitting=True,
+        )
+        configure_transparent_matplotlib_canvas(
+            self.vertical_linecut_figure,
+            self.vertical_linecut_canvas,
+            opaque_for_blitting=True,
+        )
         self.toolbar = NavigationToolbar2Tk(self.canvas, root, pack_toolbar=False)
         self.toolbar.update()
         self.crosshair_button = ttk.Button(self.toolbar, text='Crosshair', command=self.toggle_crosshair, bootstyle='info outline')
         self.crosshair_button.pack(side=tk.LEFT)
+        self.fast_crosshair_var = tk.BooleanVar(master=self.root, value=False)
         self.interpol_button = ttk.Button(self.toolbar, text='Interpolation', command=self.toggle_interpolation, bootstyle='info outline')
         self.interpol_button.pack(side=tk.LEFT)
         self.roi_button = ttk.Button(self.toolbar, text='ROI', command=self.toggle_roi, bootstyle='info outline')
         self.roi_button.pack(side=tk.LEFT)
-        self.horiz_line = None
-        self.vert_line = None
+        self.crosshair_horizontal_shadow_item = None
+        self.crosshair_vertical_shadow_item = None
+        self.crosshair_horizontal_item = None
+        self.crosshair_vertical_item = None
+        self._crosshair_overlay_visible = False
+        self._last_crosshair_canvas_coordinates = None
+        self._last_crosshair_indices = None
+        self._pending_crosshair_position = None
+        self._crosshair_update_after_id = None
+        self._crosshair_update_interval_ms = 33
+        self._display_resize_after_id = None
+        self._last_display_sampling_signature = None
+        self._pending_linecut_request = None
+        self._current_linecut_request = None
+        self._linecut_update_after_id = None
+        self._linecut_update_interval_ms = 33
+        self._linecut_axes_signature = None
+        self._horizontal_linecut_background = None
+        self._vertical_linecut_background = None
+        self.horizontal_linecut_artist = None
+        self.horizontal_linecut_cursor = None
+        self.vertical_linecut_artist = None
+        self.vertical_linecut_cursor = None
         self.auto_scale_var = tk.BooleanVar(value=True)  # Default to True (auto-scaling
         self.crosshair_enabled = False
         self.interpolation_enabled = False
@@ -482,6 +605,9 @@ class InteractiveArrayPlotter:
         self.linecut_position = None
         self.drawing_line = False
         self.current_line = None
+        self.line_preview_item = None
+        self._pending_line_preview = None
+        self._line_preview_after_id = None
         self.click_cid = None
         self.move_cid = None
         self.motion_cid = None
@@ -551,6 +677,18 @@ class InteractiveArrayPlotter:
         )
         self.auto_scale_check.pack(side=tk.TOP, pady=2)
 
+        self.fast_crosshair_checkbutton = ttk.Checkbutton(
+            self.frame2,
+            text='Fast crosshair',
+            variable=self.fast_crosshair_var,
+            command=self._on_fast_crosshair_changed,
+        )
+        self.fast_crosshair_checkbutton.pack(
+            side=tk.TOP,
+            anchor=tk.W,
+            pady=2,
+        )
+
         self.x_sweep_frame = ttk.LabelFrame(
             self.frame2,
             text='X sweep direction',
@@ -588,9 +726,36 @@ class InteractiveArrayPlotter:
 
         # Create Histogram of displayed data
         self.toolbar.pack(side=tk.BOTTOM, fill=tk.X)
-        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.horizontal_linecut_canvas.get_tk_widget().pack(
+            fill=tk.BOTH,
+            expand=True,
+        )
+        self.vertical_linecut_canvas.get_tk_widget().pack(
+            fill=tk.BOTH,
+            expand=True,
+        )
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.plot_area_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.histogram_canvas = FigureCanvasTkAgg(self.histogram_fig, master=self.frame2)
+        configure_transparent_matplotlib_canvas(
+            self.histogram_fig,
+            self.histogram_canvas,
+        )
         self.histogram_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True, anchor=tk.N)
+        self.canvas.get_tk_widget().bind(
+            '<Configure>',
+            self._on_map_canvas_configure,
+            add='+',
+        )
+        self.canvas.mpl_connect('draw_event', self._on_main_canvas_draw)
+        self.horizontal_linecut_canvas.mpl_connect(
+            'draw_event',
+            self._on_horizontal_linecut_draw,
+        )
+        self.vertical_linecut_canvas.mpl_connect(
+            'draw_event',
+            self._on_vertical_linecut_draw,
+        )
         self.plot_data()
         self.canvas.mpl_connect('key_press_event', self.on_key_press)
 
@@ -612,6 +777,137 @@ class InteractiveArrayPlotter:
         if hasattr(self, 'trace_y_index'):
             self.trace_y_index = 0
         self.plot_data()
+
+    def _coerce_calculation_arrays_to_float64(self):
+        """Keep the authoritative map coordinates and signal at full precision."""
+        for attribute_name in ('X', 'Y', 'sliced_data'):
+            array = np.asarray(getattr(self, attribute_name))
+            if np.iscomplexobj(array):
+                if np.any(np.imag(array) != 0):
+                    raise ValueError(
+                        f'{attribute_name} contains complex values and cannot '
+                        'be represented as a real-valued map.'
+                    )
+                array = np.real(array)
+            setattr(
+                self,
+                attribute_name,
+                array.astype(np.float64, copy=False),
+            )
+
+    @staticmethod
+    def _downsample_indices(point_count, target_count):
+        """Return regularly spaced source indices including the final point."""
+        point_count = int(point_count)
+        target_count = max(2, int(target_count))
+        if point_count <= target_count:
+            return np.arange(point_count, dtype=int)
+        step = max(1, int(np.ceil(point_count / target_count)))
+        indices = np.arange(0, point_count, step, dtype=int)
+        if indices[-1] != point_count - 1:
+            indices = np.append(indices, point_count - 1)
+        return indices
+
+    def _map_canvas_pixel_size(self):
+        """Return a usable pixel target before and after Tk maps the widget."""
+        canvas_widget = self.canvas.get_tk_widget()
+        width = int(canvas_widget.winfo_width())
+        height = int(canvas_widget.winfo_height())
+        if width <= 1:
+            width = max(64, int(self.figure.bbox.width))
+        if height <= 1:
+            height = max(64, int(self.figure.bbox.height))
+        return width, height
+
+    def _prepare_display_arrays(self, force=False):
+        """Build a canvas-sized float32 view of the float64 calculation grid."""
+        self._coerce_calculation_arrays_to_float64()
+        canvas_width, canvas_height = self._map_canvas_pixel_size()
+        row_indices = self._downsample_indices(
+            self.sliced_data.shape[0],
+            canvas_height,
+        )
+        column_indices = self._downsample_indices(
+            self.sliced_data.shape[1],
+            canvas_width,
+        )
+        signature = (
+            self.sliced_data.shape,
+            int(row_indices.size),
+            int(column_indices.size),
+            int(row_indices[1] - row_indices[0]) if row_indices.size > 1 else 0,
+            int(column_indices[1] - column_indices[0])
+            if column_indices.size > 1 else 0,
+        )
+        if not force and signature == self._last_display_sampling_signature:
+            return False
+
+        selection = np.ix_(row_indices, column_indices)
+        self.display_row_indices = row_indices
+        self.display_column_indices = column_indices
+        self.display_X = self.X[selection].astype(np.float32, copy=False)
+        self.display_Y = self.Y[selection].astype(np.float32, copy=False)
+        self.display_sliced_data = self.sliced_data[selection].astype(
+            np.float32,
+            copy=False,
+        )
+        center_column = self.Y.shape[1] // 2
+        self._crosshair_y_reference = np.array(
+            self.Y[:, center_column],
+            dtype=np.float64,
+            copy=True,
+        )
+        for row_index in np.flatnonzero(
+            ~np.isfinite(self._crosshair_y_reference)
+        ):
+            finite_row_values = self.Y[row_index][
+                np.isfinite(self.Y[row_index])
+            ]
+            if finite_row_values.size:
+                self._crosshair_y_reference[row_index] = finite_row_values[0]
+        self._last_display_sampling_signature = signature
+        return True
+
+    def _on_map_canvas_configure(self, event):
+        """Debounce adaptive display resampling after a canvas resize."""
+        if getattr(self, 'sliced_data', None) is None:
+            return
+        if self._display_resize_after_id is not None:
+            self.root.after_cancel(self._display_resize_after_id)
+        self._display_resize_after_id = self.root.after(
+            180,
+            self._refresh_display_after_resize,
+        )
+
+    def _on_main_canvas_draw(self, _event):
+        """Restore native overlays above the refreshed Matplotlib bitmap."""
+        self.root.after_idle(self._restore_map_overlays_after_draw)
+
+    def _raise_map_overlay_items(self):
+        """Keep all native interaction previews above the TkAgg photo image."""
+        tk_canvas = self.canvas.get_tk_widget()
+        for item in (
+            getattr(self, 'roi_preview_item', None),
+            getattr(self, 'line_preview_item', None),
+            getattr(self, 'crosshair_horizontal_shadow_item', None),
+            getattr(self, 'crosshair_vertical_shadow_item', None),
+            getattr(self, 'crosshair_horizontal_item', None),
+            getattr(self, 'crosshair_vertical_item', None),
+        ):
+            if item is not None:
+                tk_canvas.tag_raise(item)
+
+    def _restore_map_overlays_after_draw(self):
+        self._raise_map_overlay_items()
+        if self.crosshair_enabled:
+            self.refresh_crosshair()
+
+    def _refresh_display_after_resize(self):
+        self._display_resize_after_id = None
+        if getattr(self, 'sliced_data', None) is None:
+            return
+        if self._prepare_display_arrays(force=False):
+            self._draw_main_map(self.vmin, self.vmax)
 
     def _capture_displayed_data_state(self, operation_name):
         """Return an independent snapshot of the currently displayed data."""
@@ -716,7 +1012,6 @@ class InteractiveArrayPlotter:
 
         # Get selected parameter values from comboboxes
         selected_display_values = [combobox.get() for combobox in self.parameter_comboboxes]
-        selected_colormap = self.colormap_combobox.get()
         selected_indices = []
 
         for i, display_value in enumerate(selected_display_values):
@@ -876,30 +1171,11 @@ class InteractiveArrayPlotter:
                 self.sliced_data,
                 acquisition_row_indices=acquisition_rows,
             )
-
-        if hasattr(self, 'cbar'):
-            self.cbar.remove()
-            del self.cbar
-
-        c = self.ax.pcolormesh(self.X, self.Y, self.sliced_data, cmap=selected_colormap, shading='auto', zorder=1,
-                               linewidth=0, rasterized=True)
-
-        self.cbar = self.figure.colorbar(c, ax=self.ax, label=self.name_data_z)
-        self.ax.set_xlabel(self.name_data_x_axis)
-        self.ax.set_ylabel(self.name_data_y_axis)
-
-
-        # Redraw the canvas to reflect changes
-        self.ax.set_xlim(self.xlim)
-        self.ax.set_ylim(self.ylim)
-        self.ax_vline.set_ylim(self.ax.get_ylim())
-        self.ax_hline.set_xlim(self.ax.get_xlim())
-        self.canvas.draw_idle()
-
-        if self.crosshair_enabled:
-            self.refresh_crosshair()
+        self._coerce_calculation_arrays_to_float64()
+        self._prepare_display_arrays(force=True)
 
         self.update_histogramm()
+        self._draw_main_map(self.vmin, self.vmax)
         self.clear_data_operation_history()
         tock = time.perf_counter()
         print(f'Plotting time: {tock - tick} s')
@@ -917,49 +1193,256 @@ class InteractiveArrayPlotter:
         """
         self.crosshair_enabled = not self.crosshair_enabled
 
-        # Initialize or update crosshair lines
         if self.crosshair_enabled:
+            self.horizontal_linecut_frame.grid()
+            self.vertical_linecut_frame.grid()
             self.ax_vline.set_visible(True)
             self.ax_hline.set_visible(True)
-            if self.horiz_line is None:
-                self.horiz_line = self.ax.axhline(color='gray', lw=1, ls='--', zorder=10)
-            else:
-                self.horiz_line.set_visible(True)
-
-            if self.vert_line is None:
-                self.vert_line = self.ax.axvline(color='gray', lw=1, ls='--', zorder=10)
-            else:
-                self.vert_line.set_visible(True)
+            self._ensure_linecut_axes_configured(force=True)
+            self._ensure_crosshair_overlay()
             if self.crosshair_motion_cid is None:
                 self.crosshair_motion_cid = self.canvas.mpl_connect(
                     'motion_notify_event',
                     self.on_mouse_move,
                 )
+            self._apply_crosshair_display_mode()
+            self.refresh_crosshair()
         else:
+            self.horizontal_linecut_frame.grid_remove()
+            self.vertical_linecut_frame.grid_remove()
             self.ax_vline.set_visible(False)
             self.ax_hline.set_visible(False)
-
-            if self.horiz_line:
-                try:
-                    self.horiz_line.remove()
-                except ValueError:
-                    pass
-                self.horiz_line = None
-            if self.vert_line:
-                try:
-                    self.vert_line.remove()
-                except ValueError:
-                    pass
-                self.vert_line = None
+            self.canvas.get_tk_widget().configure(cursor='')
+            self._set_crosshair_overlay_state('hidden')
+            self._pending_crosshair_position = None
+            self._pending_linecut_request = None
+            self._cancel_scheduled_callback('_crosshair_update_after_id')
+            if self._linecut_update_after_id is not None:
+                self.root.after_cancel(self._linecut_update_after_id)
+                self._linecut_update_after_id = None
+            self.horizontal_linecut_canvas.draw_idle()
+            self.vertical_linecut_canvas.draw_idle()
             if self.crosshair_motion_cid is not None:
                 self.canvas.mpl_disconnect(self.crosshair_motion_cid)
                 self.crosshair_motion_cid = None
 
-        # Redraw the entire figure to ensure layout is updated
-        self.figure.canvas.draw_idle()
+    def _cancel_scheduled_callback(self, attribute_name):
+        """Cancel a stored Tk ``after`` callback and clear its identifier."""
+        callback_id = getattr(self, attribute_name, None)
+        if callback_id is None:
+            return
+        try:
+            self.root.after_cancel(callback_id)
+        except tk.TclError:
+            pass
+        setattr(self, attribute_name, None)
+
+    def _on_fast_crosshair_changed(self):
+        """Apply the selected crosshair renderer without changing linecuts."""
+        self._last_crosshair_canvas_coordinates = None
+        self._apply_crosshair_display_mode()
+        if self.crosshair_enabled and not self.fast_crosshair_var.get():
+            self.refresh_crosshair()
+
+    def _apply_crosshair_display_mode(self):
+        """Use the native cursor in fast mode and hide expensive guide lines."""
+        tk_canvas = self.canvas.get_tk_widget()
+        fast_mode = bool(self.fast_crosshair_var.get())
+        tk_canvas.configure(
+            cursor='crosshair' if self.crosshair_enabled and fast_mode else ''
+        )
+        if not self.crosshair_enabled or fast_mode:
+            self._set_crosshair_overlay_state('hidden')
+
+    def _ensure_crosshair_overlay(self):
+        """Create outlined Tk crosshair lines above the static map bitmap."""
+        tk_canvas = self.canvas.get_tk_widget()
+        if self.crosshair_horizontal_shadow_item is None:
+            self.crosshair_horizontal_shadow_item = tk_canvas.create_line(
+                0,
+                0,
+                0,
+                0,
+                fill='black',
+                width=3,
+                dash=(4, 3),
+                state='hidden',
+            )
+        if self.crosshair_vertical_shadow_item is None:
+            self.crosshair_vertical_shadow_item = tk_canvas.create_line(
+                0,
+                0,
+                0,
+                0,
+                fill='black',
+                width=3,
+                dash=(4, 3),
+                state='hidden',
+            )
+        if self.crosshair_horizontal_item is None:
+            self.crosshair_horizontal_item = tk_canvas.create_line(
+                0,
+                0,
+                0,
+                0,
+                fill='white',
+                width=1,
+                dash=(4, 3),
+                state='hidden',
+            )
+        if self.crosshair_vertical_item is None:
+            self.crosshair_vertical_item = tk_canvas.create_line(
+                0,
+                0,
+                0,
+                0,
+                fill='white',
+                width=1,
+                dash=(4, 3),
+                state='hidden',
+            )
+        self._raise_map_overlay_items()
+
+    def _set_crosshair_overlay_state(self, state):
+        visible = state != 'hidden'
+        if visible == self._crosshair_overlay_visible:
+            return
+        tk_canvas = self.canvas.get_tk_widget()
+        for item in (
+            self.crosshair_horizontal_shadow_item,
+            self.crosshair_vertical_shadow_item,
+            self.crosshair_horizontal_item,
+            self.crosshair_vertical_item,
+        ):
+            if item is not None:
+                tk_canvas.itemconfigure(item, state=state)
+        self._crosshair_overlay_visible = visible
+        if visible:
+            self._raise_map_overlay_items()
+
+    def _position_crosshair_overlay(self, x_value, y_value):
+        """Move the Tk overlay without redrawing the Matplotlib figure."""
+        if self.fast_crosshair_var.get():
+            return
+        self._ensure_crosshair_overlay()
+        tk_canvas = self.canvas.get_tk_widget()
+        canvas_height = tk_canvas.winfo_height()
+        x_pixel, y_pixel = self.ax.transData.transform((x_value, y_value))
+        axes_bounds = self.ax.bbox
+        tk_y = canvas_height - y_pixel
+        tk_top = canvas_height - axes_bounds.y1
+        tk_bottom = canvas_height - axes_bounds.y0
+        canvas_coordinates = (
+            int(round(axes_bounds.x0)),
+            int(round(tk_y)),
+            int(round(axes_bounds.x1)),
+            int(round(x_pixel)),
+            int(round(tk_top)),
+            int(round(tk_bottom)),
+        )
+        if canvas_coordinates == self._last_crosshair_canvas_coordinates:
+            self._set_crosshair_overlay_state('normal')
+            self._raise_map_overlay_items()
+            return
+
+        for horizontal_item in (
+            self.crosshair_horizontal_shadow_item,
+            self.crosshair_horizontal_item,
+        ):
+            tk_canvas.coords(
+                horizontal_item,
+                canvas_coordinates[0],
+                canvas_coordinates[1],
+                canvas_coordinates[2],
+                canvas_coordinates[1],
+            )
+        for vertical_item in (
+            self.crosshair_vertical_shadow_item,
+            self.crosshair_vertical_item,
+        ):
+            tk_canvas.coords(
+                vertical_item,
+                canvas_coordinates[3],
+                canvas_coordinates[4],
+                canvas_coordinates[3],
+                canvas_coordinates[5],
+            )
+        self._last_crosshair_canvas_coordinates = canvas_coordinates
+        self._set_crosshair_overlay_state('normal')
+        self._raise_map_overlay_items()
 
     def toggle_invert(self):
         self.invert_enabled = not self.invert_enabled
+
+    def _data_to_tk_canvas_point(self, x_value, y_value):
+        """Transform a data coordinate into the map's native Tk coordinates."""
+        tk_canvas = self.canvas.get_tk_widget()
+        x_pixel, y_pixel = self.ax.transData.transform((x_value, y_value))
+        return int(round(x_pixel)), int(round(tk_canvas.winfo_height() - y_pixel))
+
+    def _ensure_roi_preview(self):
+        """Create the native ROI outline used only while selecting its size."""
+        if self.roi_preview_item is not None:
+            return
+        tk_canvas = self.canvas.get_tk_widget()
+        self.roi_preview_item = tk_canvas.create_rectangle(
+            0,
+            0,
+            0,
+            0,
+            outline='red',
+            width=2,
+            state='hidden',
+        )
+        tk_canvas.tag_raise(self.roi_preview_item)
+
+    def _queue_roi_preview(self, start_point, end_point):
+        """Coalesce ROI outline movement so raw mouse events cannot pile up."""
+        self._pending_roi_preview = (tuple(start_point), tuple(end_point))
+        if self._roi_preview_after_id is None:
+            self._roi_preview_after_id = self.root.after(
+                self._overlay_update_interval_ms,
+                self._flush_roi_preview,
+            )
+
+    def _flush_roi_preview(self):
+        self._roi_preview_after_id = None
+        preview = self._pending_roi_preview
+        self._pending_roi_preview = None
+        if preview is None or not self.roi_mode:
+            return
+        self._ensure_roi_preview()
+        start_point, end_point = preview
+        x1, y1 = self._data_to_tk_canvas_point(*start_point)
+        x2, y2 = self._data_to_tk_canvas_point(*end_point)
+        tk_canvas = self.canvas.get_tk_widget()
+        tk_canvas.coords(
+            self.roi_preview_item,
+            min(x1, x2),
+            min(y1, y2),
+            max(x1, x2),
+            max(y1, y2),
+        )
+        tk_canvas.itemconfigure(self.roi_preview_item, state='normal')
+
+    def _hide_roi_preview(self):
+        self._pending_roi_preview = None
+        self._cancel_scheduled_callback('_roi_preview_after_id')
+        if self.roi_preview_item is not None:
+            self.canvas.get_tk_widget().itemconfigure(
+                self.roi_preview_item,
+                state='hidden',
+            )
+
+    def _remove_current_roi_patch(self):
+        if self.current_roi_patch is None:
+            return False
+        try:
+            self.current_roi_patch.remove()
+        except ValueError:
+            pass
+        self.current_roi_patch = None
+        return True
 
     def toggle_roi(self):
         if self.roi_mode:  # If ROI mode is active, deactivate it
@@ -970,21 +1453,20 @@ class InteractiveArrayPlotter:
                 self.canvas.mpl_disconnect(self.move_cid)
                 self.move_cid = None
             self.roi_mode = False
-            if self.current_roi_patch:
-                self.current_roi_patch.remove()  # Remove the rectangle if it exists
-                self.current_roi_patch = None
-            self.ax.patches.clear()  # Clear any remaining patches
-            self.canvas.draw_idle()
+            self._hide_roi_preview()
+            if self._remove_current_roi_patch():
+                self.canvas.draw_idle()
             return
 
         # Activate ROI mode
         self.roi_mode = True
         self.roi_corners = []  # Initialize the list for ROI corners
-        self.current_roi_patch = None  # Reset the rectangle
+        self._remove_current_roi_patch()
+        self._hide_roi_preview()
 
         # Function to handle mouse click
         def on_click(event):
-            if not event.inaxes or event.button != 1:  # Only handle left-clicks inside the axes
+            if event.inaxes != self.ax or event.button != 1:
                 return
 
             if len(self.roi_corners) == 0:
@@ -996,35 +1478,38 @@ class InteractiveArrayPlotter:
                 xmin, xmax = sorted([self.roi_corners[0][0], self.roi_corners[1][0]])
                 ymin, ymax = sorted([self.roi_corners[0][1], self.roi_corners[1][1]])
                 self.roi_corners = [(xmin, ymin), (xmax, ymax)]  # Store sorted coordinates
-                if self.current_roi_patch:
-                    self.current_roi_patch.set_alpha(.25)
+                self._hide_roi_preview()
+                self._remove_current_roi_patch()
+                self.current_roi_patch = self.ax.add_patch(
+                    plt.Rectangle(
+                        (xmin, ymin),
+                        xmax - xmin,
+                        ymax - ymin,
+                        color='red',
+                        alpha=0.25,
+                    )
+                )
+                self.canvas.draw_idle()
                 print(f"ROI selected: {self.roi_corners}")
             else:
                 # Third click: Reset the ROI
                 self.roi_corners.clear()
-                if self.current_roi_patch:
-                    self.current_roi_patch.remove()
-                    self.current_roi_patch = None
-                self.ax.patches.clear()
-                self.canvas.draw_idle()
+                self._hide_roi_preview()
+                if self._remove_current_roi_patch():
+                    self.canvas.draw_idle()
 
         # Function to handle mouse movement
         def on_move(event):
-            if len(self.roi_corners) == 1 and event.inaxes:  # If the first point is selected
-                x1, y1 = self.roi_corners[0]
-                x2, y2 = event.xdata, event.ydata
-                if self.current_roi_patch:
-                    self.current_roi_patch.remove()  # Remove the previous patch
-                self.current_roi_patch = self.ax.add_patch(
-                    plt.Rectangle(
-                        (min(x1, x2), min(y1, y2)),
-                        abs(x2 - x1),
-                        abs(y2 - y1),
-                        color='red',
-                        alpha=0.5
-                    )
+            if (
+                len(self.roi_corners) == 1
+                and event.inaxes == self.ax
+                and event.xdata is not None
+                and event.ydata is not None
+            ):
+                self._queue_roi_preview(
+                    self.roi_corners[0],
+                    (event.xdata, event.ydata),
                 )
-                self.canvas.draw_idle()
 
         # Connect the click and motion events
         self.click_cid = self.canvas.mpl_connect('button_press_event', on_click)
@@ -1033,21 +1518,240 @@ class InteractiveArrayPlotter:
     def refresh_crosshair(self):
         if not self.crosshair_enabled:
             return
-        for line_artist in (self.horiz_line, self.vert_line):
-            if line_artist is not None:
-                try:
-                    line_artist.remove()
-                except ValueError:
-                    pass
-        self.horiz_line = self.ax.axhline(
-            color='gray', lw=1, ls='--', zorder=10
+        row_count, column_count = self.sliced_data.shape
+        self.y_index = min(max(int(self.y_index), 0), row_count - 1)
+        self.x_index = min(max(int(self.x_index), 0), column_count - 1)
+        x_value = float(self.X[self.y_index, self.x_index])
+        y_value = float(self.Y[self.y_index, self.x_index])
+        self._apply_crosshair_display_mode()
+        self._position_crosshair_overlay(x_value, y_value)
+        self._last_crosshair_indices = (self.y_index, self.x_index)
+        self._ensure_linecut_axes_configured()
+        self._queue_crosshair_linecuts(
+            self.y_index,
+            self.x_index,
+            x_value,
+            y_value,
         )
-        self.vert_line = self.ax.axvline(
-            color='gray', lw=1, ls='--', zorder=10
+
+    @staticmethod
+    def _nearest_finite_index(values, target):
+        values = np.asarray(values, dtype=float)
+        distances = np.abs(values - target)
+        distances[~np.isfinite(distances)] = np.inf
+        if not np.any(np.isfinite(distances)):
+            return 0
+        return int(np.argmin(distances))
+
+    def _nearest_crosshair_indices(self, x_value, y_value):
+        """Find a full-resolution cell in O(rows + columns) for grid maps."""
+        row_index = self._nearest_finite_index(
+            self._crosshair_y_reference,
+            y_value,
         )
-        self.ax_vline.set_visible(True)
+        column_index = self._nearest_finite_index(
+            self.X[row_index, :],
+            x_value,
+        )
+        row_index = self._nearest_finite_index(
+            self.Y[:, column_index],
+            y_value,
+        )
+        return row_index, column_index
+
+    def _linecut_signal_limits(self):
+        lower = float(self.vmin)
+        upper = float(self.vmax)
+        if not np.isfinite(lower) or not np.isfinite(upper):
+            finite_data = self.sliced_data[np.isfinite(self.sliced_data)]
+            if finite_data.size:
+                lower = float(np.min(finite_data))
+                upper = float(np.max(finite_data))
+            else:
+                lower, upper = 0.0, 1.0
+        lower, upper = sorted((lower, upper))
+        if lower == upper:
+            padding = max(1.0, abs(lower) * 0.05)
+            lower -= padding
+            upper += padding
+        return lower, upper
+
+    def _ensure_linecut_axes_configured(self, force=False):
+        """Create static axes and persistent animated linecut artists."""
+        x_limits = tuple(float(value) for value in self.ax.get_xlim())
+        y_limits = tuple(float(value) for value in self.ax.get_ylim())
+        signal_limits = self._linecut_signal_limits()
+        signature = (x_limits, y_limits, signal_limits)
+        if not force and signature == self._linecut_axes_signature:
+            return
+
+        self.ax_hline.clear()
         self.ax_hline.set_visible(True)
-        self.figure.canvas.draw_idle()
+        self.ax_hline.set_xlim(x_limits)
+        self.ax_hline.set_ylim(signal_limits)
+        self.ax_hline.set_xticklabels([])
+        (self.horizontal_linecut_artist,) = self.ax_hline.plot(
+            [],
+            [],
+            color='#1f77b4',
+            animated=True,
+        )
+        self.horizontal_linecut_cursor = self.ax_hline.axvline(
+            x=x_limits[0],
+            color='gray',
+            lw=1,
+            ls='--',
+            animated=True,
+        )
+
+        self.ax_vline.clear()
+        self.ax_vline.set_visible(True)
+        self.ax_vline.set_xlim(signal_limits)
+        self.ax_vline.set_ylim(y_limits)
+        self.ax_vline.set_yticklabels([])
+        for label in self.ax_vline.get_xticklabels():
+            label.set_rotation(270)
+        (self.vertical_linecut_artist,) = self.ax_vline.plot(
+            [],
+            [],
+            color='#1f77b4',
+            animated=True,
+        )
+        self.vertical_linecut_cursor = self.ax_vline.axhline(
+            y=y_limits[0],
+            color='gray',
+            lw=1,
+            ls='--',
+            animated=True,
+        )
+        configure_transparent_matplotlib_canvas(
+            self.horizontal_linecut_figure,
+            self.horizontal_linecut_canvas,
+            opaque_for_blitting=True,
+        )
+        configure_transparent_matplotlib_canvas(
+            self.vertical_linecut_figure,
+            self.vertical_linecut_canvas,
+            opaque_for_blitting=True,
+        )
+
+        self._linecut_axes_signature = signature
+        self._horizontal_linecut_background = None
+        self._vertical_linecut_background = None
+        self.horizontal_linecut_canvas.draw_idle()
+        self.vertical_linecut_canvas.draw_idle()
+
+    def _on_horizontal_linecut_draw(self, _event):
+        if not self.crosshair_enabled or not self.ax_hline.get_visible():
+            return
+        self._horizontal_linecut_background = (
+            self.horizontal_linecut_canvas.copy_from_bbox(self.ax_hline.bbox)
+        )
+        if self._current_linecut_request is not None:
+            self.root.after_idle(self._blit_current_linecuts)
+
+    def _on_vertical_linecut_draw(self, _event):
+        if not self.crosshair_enabled or not self.ax_vline.get_visible():
+            return
+        self._vertical_linecut_background = (
+            self.vertical_linecut_canvas.copy_from_bbox(self.ax_vline.bbox)
+        )
+        if self._current_linecut_request is not None:
+            self.root.after_idle(self._blit_current_linecuts)
+
+    def _queue_crosshair_linecuts(
+        self,
+        row_index,
+        column_index,
+        x_value,
+        y_value,
+    ):
+        """Retain only the newest linecut request and update at a bounded rate."""
+        self._pending_linecut_request = (
+            int(row_index),
+            int(column_index),
+            float(x_value),
+            float(y_value),
+        )
+        if self._linecut_update_after_id is None:
+            self._linecut_update_after_id = self.root.after(
+                self._linecut_update_interval_ms,
+                self._flush_crosshair_linecuts,
+            )
+
+    def _update_crosshair_linecuts_now(
+        self,
+        row_index,
+        column_index,
+        x_value,
+        y_value,
+    ):
+        """Update linecuts inside an already rate-limited crosshair flush."""
+        self._cancel_scheduled_callback('_linecut_update_after_id')
+        self._pending_linecut_request = (
+            int(row_index),
+            int(column_index),
+            float(x_value),
+            float(y_value),
+        )
+        self._flush_crosshair_linecuts()
+
+    def _flush_crosshair_linecuts(self):
+        self._linecut_update_after_id = None
+        request = self._pending_linecut_request
+        self._pending_linecut_request = None
+        if request is None or not self.crosshair_enabled:
+            return
+        self._current_linecut_request = request
+        row_index, column_index, x_value, y_value = request
+        self._ensure_linecut_axes_configured()
+
+        horizontal_indices = self._downsample_indices(
+            self.sliced_data.shape[1],
+            min(512, self.sliced_data.shape[1]),
+        )
+        vertical_indices = self._downsample_indices(
+            self.sliced_data.shape[0],
+            min(512, self.sliced_data.shape[0]),
+        )
+
+        self.horizontal_linecut_artist.set_data(
+            self.X[row_index, horizontal_indices].astype(np.float32),
+            self.sliced_data[row_index, horizontal_indices].astype(np.float32),
+        )
+        self.horizontal_linecut_cursor.set_xdata([x_value, x_value])
+        self.vertical_linecut_artist.set_data(
+            self.sliced_data[vertical_indices, column_index].astype(np.float32),
+            self.Y[vertical_indices, column_index].astype(np.float32),
+        )
+        self.vertical_linecut_cursor.set_ydata([y_value, y_value])
+        self._blit_current_linecuts()
+
+    def _blit_current_linecuts(self):
+        """Blit only animated line artists over cached static linecut axes."""
+        if not self.crosshair_enabled:
+            return
+        if (
+            self._horizontal_linecut_background is None
+            or self._vertical_linecut_background is None
+        ):
+            self.horizontal_linecut_canvas.draw_idle()
+            self.vertical_linecut_canvas.draw_idle()
+            return
+
+        self.horizontal_linecut_canvas.restore_region(
+            self._horizontal_linecut_background
+        )
+        self.ax_hline.draw_artist(self.horizontal_linecut_artist)
+        self.ax_hline.draw_artist(self.horizontal_linecut_cursor)
+        self.horizontal_linecut_canvas.blit(self.ax_hline.bbox)
+
+        self.vertical_linecut_canvas.restore_region(
+            self._vertical_linecut_background
+        )
+        self.ax_vline.draw_artist(self.vertical_linecut_artist)
+        self.ax_vline.draw_artist(self.vertical_linecut_cursor)
+        self.vertical_linecut_canvas.blit(self.ax_vline.bbox)
 
     def init_movable_lines(self):
         # Initial positions for vmin and vmax lines
@@ -1098,78 +1802,56 @@ class InteractiveArrayPlotter:
         # Called when the mouse is released
         self.picked_line = None
 
-    def on_mouse_move(self, event):
+    def _queue_crosshair_position(self, x_value, y_value):
+        """Retain only the newest pointer position for the next 30 Hz update."""
+        self._pending_crosshair_position = (float(x_value), float(y_value))
+        if self._crosshair_update_after_id is None:
+            self._crosshair_update_after_id = self.root.after(
+                self._crosshair_update_interval_ms,
+                self._flush_crosshair_position,
+            )
 
-        if event.inaxes != self.ax or not self.crosshair_enabled:
+    def _flush_crosshair_position(self):
+        """Move guides, resolve the data cell, and refresh linecuts together."""
+        self._crosshair_update_after_id = None
+        position = self._pending_crosshair_position
+        self._pending_crosshair_position = None
+        if (
+            position is None
+            or not self.crosshair_enabled
+            or self.freeze_linecut
+        ):
             return
 
-        if not self.freeze_linecut:
-            # Update the position of the crosshair lines
-            self.horiz_line.set_ydata([event.ydata, event.ydata])
-            self.vert_line.set_xdata([event.xdata, event.xdata])
+        x_value, y_value = position
+        self._position_crosshair_overlay(x_value, y_value)
+        row_index, column_index = self._nearest_crosshair_indices(
+            x_value,
+            y_value,
+        )
+        self.y_index, self.x_index = row_index, column_index
+        current_indices = (row_index, column_index)
+        if current_indices == self._last_crosshair_indices:
+            return
 
-            grid_indices = nearest_grid_indices(
-                self.X,
-                self.Y,
-                event.xdata,
-                event.ydata,
-            )
-            if grid_indices is None:
-                return
-            self.y_index, self.x_index = grid_indices
-            # Update the vertical line plot
-            self.ax_vline.clear()
-            self.ax_vline.plot(
-                self.sliced_data[:, self.x_index],
-                self.Y[:, self.x_index],
-            )
-            self.ax_vline.set_yticklabels([])
-            for label in self.ax_vline.get_xticklabels():
-                label.set_rotation(270)
-            self.ax_vline.axhline(y=event.ydata, color='gray', lw=1, ls='--')
+        self._last_crosshair_indices = current_indices
+        self._update_crosshair_linecuts_now(
+            row_index,
+            column_index,
+            x_value,
+            y_value,
+        )
 
-            # Update the horizontal line plot
-            self.ax_hline.clear()
-            self.ax_hline.plot(
-                self.X[self.y_index, :],
-                self.sliced_data[self.y_index, :],
-            )
-            self.ax_hline.set_xticklabels([])
-            self.ax_hline.axvline(x=event.xdata, color='gray', lw=1, ls='--')
+    def on_mouse_move(self, event):
+        if event.inaxes != self.ax or not self.crosshair_enabled:
+            return
+        if self.freeze_linecut or event.xdata is None or event.ydata is None:
+            return
 
-            # Update the limits of the line plots to match the main plot
-            self.ax_vline.set_ylim(self.ax.get_ylim())
-            self.ax_hline.set_xlim(self.ax.get_xlim())
-
-            self.figure.canvas.draw_idle()
-
-        elif self.freeze_linecut:
-            frozen_y_index, frozen_x_index = self.linecut_position
-            # Update the vertical line plot
-            self.ax_vline.clear()
-            self.ax_vline.plot(
-                self.sliced_data[:, frozen_x_index],
-                self.Y[:, frozen_x_index],
-            )
-            self.ax_vline.set_yticklabels([])
-            for label in self.ax_vline.get_xticklabels():
-                label.set_rotation(270)
-            self.ax_vline.axhline(y=event.ydata, color='gray', lw=1, ls='--')
-
-            # Update the horizontal line plot
-            self.ax_hline.clear()
-            self.ax_hline.plot(
-                self.X[frozen_y_index, :],
-                self.sliced_data[frozen_y_index, :],
-            )
-            self.ax_hline.set_xticklabels([])
-            self.ax_hline.axvline(x=event.xdata, color='gray', lw=1, ls='--')
-
-            # Update the limits of the line plots to match the main plot
-            self.ax_vline.set_ylim(self.ax.get_ylim())
-            self.ax_hline.set_xlim(self.ax.get_xlim())
-
-            #self.figure.canvas.draw_idle()
+        self._queue_crosshair_position(
+            event.xdata,
+            event.ydata,
+        )
 
     def on_key_press(self, event):
         if event.key == 's':
@@ -1595,6 +2277,7 @@ class InteractiveArrayPlotter:
 
         # Create a canvas to embed the figure into the Tkinter window
         self.fft_canvas = FigureCanvasTkAgg(self.fft_fig, master=self.fft_plot_window)
+        configure_transparent_matplotlib_canvas(self.fft_fig, self.fft_canvas)
         self.fft_canvas.draw_idle()
 
         self.fft_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
@@ -1634,6 +2317,10 @@ class InteractiveArrayPlotter:
         self.fft_filter_fig, self.fft_filter_ax = plt.subplots(1, 1, figsize=(6, 6))
 
         self.fft_filter_canvas = FigureCanvasTkAgg(self.fft_filter_fig, master=left_frame)
+        configure_transparent_matplotlib_canvas(
+            self.fft_filter_fig,
+            self.fft_filter_canvas,
+        )
         self.fft_filter_canvas.draw_idle()
         self.fft_filter_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
 
@@ -2173,22 +2860,82 @@ class InteractiveArrayPlotter:
         self.fft_plot_window.destroy()
         self.fft_plot_window.update()
 
+    def _ensure_line_preview(self):
+        """Create the native line used only while choosing an endpoint."""
+        if self.line_preview_item is not None:
+            return
+        tk_canvas = self.canvas.get_tk_widget()
+        self.line_preview_item = tk_canvas.create_line(
+            0,
+            0,
+            0,
+            0,
+            fill='red',
+            width=2,
+            state='hidden',
+        )
+        tk_canvas.tag_raise(self.line_preview_item)
+
+    def _queue_line_preview(self, start_point, end_point):
+        """Retain only the newest temporary line endpoint for rendering."""
+        self._pending_line_preview = (tuple(start_point), tuple(end_point))
+        if self._line_preview_after_id is None:
+            self._line_preview_after_id = self.root.after(
+                self._overlay_update_interval_ms,
+                self._flush_line_preview,
+            )
+
+    def _flush_line_preview(self):
+        self._line_preview_after_id = None
+        preview = self._pending_line_preview
+        self._pending_line_preview = None
+        if preview is None or not self.drawing_line:
+            return
+        self._ensure_line_preview()
+        start_point, end_point = preview
+        x1, y1 = self._data_to_tk_canvas_point(*start_point)
+        x2, y2 = self._data_to_tk_canvas_point(*end_point)
+        tk_canvas = self.canvas.get_tk_widget()
+        tk_canvas.coords(self.line_preview_item, x1, y1, x2, y2)
+        tk_canvas.itemconfigure(self.line_preview_item, state='normal')
+
+    def _hide_line_preview(self):
+        self._pending_line_preview = None
+        self._cancel_scheduled_callback('_line_preview_after_id')
+        if self.line_preview_item is not None:
+            self.canvas.get_tk_widget().itemconfigure(
+                self.line_preview_item,
+                state='hidden',
+            )
+
+    def _cancel_in_progress_line_drawing(self):
+        """Discard an unfinished native preview without redrawing the map."""
+        self.drawing_line = False
+        self.current_line = None
+        self._hide_line_preview()
+
     def activate_line_drawing(self):
         if hasattr(self, 'roi_mode') and self.roi_mode:
             self.toggle_roi()  # Turn off ROI before enabling line drawing
 
+        if self.click_cid is not None:
+            self.canvas.mpl_disconnect(self.click_cid)
+        if self.move_cid is not None:
+            self.canvas.mpl_disconnect(self.move_cid)
         self.click_cid = self.canvas.mpl_connect('button_press_event', self.on_canvas_click)
         self.move_cid = self.canvas.mpl_connect('motion_notify_event', self.on_canvas_move)
 
     def deactivate_line_drawing(self):
-        if hasattr(self, 'click_cid'):
+        if self.click_cid is not None:
             self.canvas.mpl_disconnect(self.click_cid)
             self.click_cid = None
-        if hasattr(self, 'move_cid'):
+        if self.move_cid is not None:
             self.canvas.mpl_disconnect(self.move_cid)
-            self.move_cid = None  # Remove the attribute to clean up
+            self.move_cid = None
+        self._cancel_in_progress_line_drawing()
 
     def reset_lines(self):
+        self._cancel_in_progress_line_drawing()
         self.drawn_lines_list = []
         self.linecut_settings_list = []
         self.update_lines_listbox()
@@ -2661,12 +3408,7 @@ class InteractiveArrayPlotter:
 
         # Cancel any in-progress line drawing
         if hasattr(self, 'drawing_line') and self.drawing_line:
-            self.drawing_line = False
-            if hasattr(self, 'current_line_artist') and self.current_line_artist is not None:
-                self.current_line_artist.remove()
-                self.current_line_artist = None
-            self.current_line = None
-            self.canvas.draw_idle()
+            self._cancel_in_progress_line_drawing()
 
     def show_endpoint_markers(self, line_index):
         """Display markers at the endpoints of the selected line"""
@@ -2918,65 +3660,92 @@ class InteractiveArrayPlotter:
             self.lines_listbox.insert(tk.END, line_str)
 
     def on_canvas_click(self, event):
-        if event.inaxes != self.ax:
+        if (
+            event.inaxes != self.ax
+            or event.xdata is None
+            or event.ydata is None
+        ):
             return  # Ignore clicks outside the axes
 
         if not self.drawing_line:
             # Start drawing a new line
             self.drawing_line = True
             self.current_line = [(event.xdata, event.ydata), (event.xdata, event.ydata)]
-            # Draw a line on the plot
-            (line,) = self.ax.plot([event.xdata, event.xdata], [event.ydata, event.ydata], color='red')
-            self.current_line_artist = line
+            self._queue_line_preview(
+                self.current_line[0],
+                self.current_line[1],
+            )
         else:
             # Finalize the current line
             self.drawing_line = False
             # Update the final point of the line
             self.current_line[1] = (event.xdata, event.ydata)
-            self.drawn_lines_list.append(self.current_line)
+            self.drawn_lines_list.append(
+                [tuple(self.current_line[0]), tuple(self.current_line[1])]
+            )
             self.linecut_settings_list.append(self._default_linecut_settings())
-            if self.current_line_artist in self.ax.lines:
-                self.current_line_artist.remove()
-            self.current_line_artist = None
+            self._hide_line_preview()
             self.update_lines_listbox()
             self.redraw_saved_lines()
             self.current_line = None  # Reset for the next line
             self.canvas.draw_idle()
 
     def on_canvas_move(self, event):
-        if event.inaxes != self.ax or not self.drawing_line:
+        if (
+            event.inaxes != self.ax
+            or not self.drawing_line
+            or event.xdata is None
+            or event.ydata is None
+        ):
             return  # Ignore if we're not in the process of drawing a line
 
         # Update the end point of the current line to follow the mouse
         self.current_line[1] = (event.xdata, event.ydata)
-        self.current_line_artist.set_data([self.current_line[0][0], event.xdata],
-                                          [self.current_line[0][1], event.ydata])
-        self.canvas.draw_idle()
+        self._queue_line_preview(
+            self.current_line[0],
+            self.current_line[1],
+        )
 
-    def update_pcolormesh(self, vmin, vmax):
-        # Update the pcolormesh with new vmin and vmax values
+    def _draw_main_map(self, vmin, vmax):
+        """Render only the prepared float32 display grid on the main canvas."""
         self.ax.clear()
-        c = self.ax.pcolormesh(self.X, self.Y, self.sliced_data, cmap=self.colormap_combobox.get(), vmin=vmin,
-                                   vmax=vmax,
-                                   shading='auto', zorder=1, linewidth=0, rasterized=True)
         if hasattr(self, 'cbar'):
             self.cbar.remove()
             del self.cbar
 
+        c = self.ax.pcolormesh(
+            self.display_X,
+            self.display_Y,
+            self.display_sliced_data,
+            cmap=self.colormap_combobox.get(),
+            vmin=vmin,
+            vmax=vmax,
+            shading='auto',
+            zorder=1,
+            linewidth=0,
+            rasterized=True,
+        )
+        # NavigationToolbar2 otherwise calls QuadMesh.contains() for every
+        # motion event while composing its status message. That cell-by-cell
+        # hit test dominates crosshair, ROI, and line interaction on large
+        # maps; coordinates and pan/zoom continue to work without it.
+        c.mouseover = False
         self.cbar = self.figure.colorbar(c, ax=self.ax, label=self.name_data_z)
         self.ax.set_xlabel(self.name_data_x_axis)
         self.ax.set_ylabel(self.name_data_y_axis)
         self.ax.set_xlim(self.xlim)
         self.ax.set_ylim(self.ylim)
-        self.ax_vline.set_ylim(self.ax.get_ylim())
-        self.ax_hline.set_xlim(self.ax.get_xlim())
 
         # Redraw all the lines in drawn_lines_list
         self.redraw_saved_lines()
+        configure_transparent_matplotlib_canvas(self.figure, self.canvas)
 
-        if self.crosshair_enabled:
-            self.refresh_crosshair()
         self.canvas.draw_idle()
+
+    def update_pcolormesh(self, vmin, vmax):
+        """Refresh the display layer after an explicit data/view operation."""
+        self._prepare_display_arrays(force=True)
+        self._draw_main_map(vmin, vmax)
 
     def update_histogramm(self):
         self.histogram_ax.clear()
@@ -2985,6 +3754,10 @@ class InteractiveArrayPlotter:
         self.histogram_ax.set_xticklabels([])
 
         self.init_movable_lines()
+        configure_transparent_matplotlib_canvas(
+            self.histogram_fig,
+            self.histogram_canvas,
+        )
         self.histogram_canvas.draw_idle()
 
     def update_plot(self):
@@ -3045,10 +3818,16 @@ class InteractiveArrayPlotter:
         self.ax_vline.set_visible(False)
         self.ax_hline.set_visible(False)
         self.crosshair_enabled = False
+        self.canvas.get_tk_widget().configure(cursor='')
+        self._set_crosshair_overlay_state('hidden')
+        self._hide_roi_preview()
+        self._hide_line_preview()
 
         # Reset internal data or state as needed
         self.sliced_data = None
         self.X, self.Y = None, None
+        self.display_sliced_data = None
+        self.display_X, self.display_Y = None, None
         self.xlim, self.ylim = None, None
         self.relation_parameter_entry_list = []
         self.drawn_lines_list = []
@@ -3056,7 +3835,17 @@ class InteractiveArrayPlotter:
 
         # Redraw the canvas to reflect the reset state
         self.canvas.draw_idle()
+        self.horizontal_linecut_canvas.draw_idle()
+        self.vertical_linecut_canvas.draw_idle()
         self.histogram_canvas.draw_idle()
+        for callback_attribute in (
+            '_display_resize_after_id',
+            '_crosshair_update_after_id',
+            '_linecut_update_after_id',
+            '_roi_preview_after_id',
+            '_line_preview_after_id',
+        ):
+            self._cancel_scheduled_callback(callback_attribute)
         self.root.destroy()
 
 
@@ -3076,9 +3865,12 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
 
         self.trace_selected = 0
         self.enable_hist = False
-        # Create a new figure with two subplots
-        self.figure, (self.ax, self.line_ax) = plt.subplots(2, 1, gridspec_kw=dict(height_ratios=[3, 1]), figsize=(10, 10))
-        # Call the constructor of the parent class with the new figure and ax
+        # Keep the selected trace on its own canvas so trace changes do not
+        # redraw the map canvas.
+        self.figure = Figure(figsize=(10, 7), dpi=100)
+        self.ax = self.figure.add_subplot(111)
+        self.trace_figure = Figure(figsize=(8, 2.2), dpi=100)
+        self.line_ax = self.trace_figure.add_subplot(111)
         super().__init__(root, hdf5data, self.figure, self.ax)
         self.canvas.mpl_connect('button_press_event', self.on_right_click)
         self.file_menu.add_command(label="Save displayed Trace as NumPy array", command=self.save_trace)
@@ -3088,24 +3880,20 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
         self.trace_menu.add_command(label="Toggle Histogram", command=self.open_hist_window)
         self.menubar.add_cascade(label="Traces Menu", menu=self.trace_menu)
 
-        #
-        # Additional initialization for the line plot
+        self.trace_frame = ttk.Frame(self.plot_area_frame, height=220)
+        self.trace_frame.grid(row=2, column=0, sticky=tk.EW)
+        self.trace_canvas = FigureCanvasTkAgg(
+            self.trace_figure,
+            master=self.trace_frame,
+        )
+        configure_transparent_matplotlib_canvas(
+            self.trace_figure,
+            self.trace_canvas,
+        )
+        self.trace_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
         self.initialize_line_plot()
-        self.figure.subplots_adjust(hspace=0.5)
-        self.line_ax.set_position([0.125, 0.1, 0.62, 0.2])
-        self.ax_vline.set_position([0.91, 0.42, 0.05, 0.47])  # Adjusted position and size
-        self.ax_hline.set_position([0.12, 0.94, 0.62, 0.05])  # Adjusted position and size
-        # Redraw the canvas with the new figure
-        self.canvas.figure = self.figure
-        self.canvas.draw_idle()
-        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
-        # Redraw the toolbar with the new canvas
-        self.toolbar.canvas = self.canvas
-        self.toolbar.update()
-        self.toolbar.pack(side=tk.BOTTOM, fill=tk.X)
-
-        self.plot_data()
+        self.update_line_plot()
 
     def initialize_line_plot(self):
         # Set up the line plot
@@ -3116,7 +3904,8 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
 
     def plot_data(self):
         super().plot_data()
-        self.update_line_plot()
+        if hasattr(self, 'trace_canvas'):
+            self.update_line_plot()
 
     def update_line_plot(self):
         selected_display_values = [combobox.get() for combobox in self.parameter_comboboxes]
@@ -3156,7 +3945,20 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
         if not self.enable_hist:
             self.line_ax.set_title(f'Trace at {self.name_data_x_axis}: {self.X[self.trace_y_index][self.trace_x_index]:.3f} ; '
                                    f'{self.name_data_y_axis}: {self.Y[self.trace_y_index][self.trace_x_index]:.3f} ')
-            self.line_ax.plot(self.times, self.trace_selected)
+            trace_width = max(
+                64,
+                self.trace_canvas.get_tk_widget().winfo_width(),
+            )
+            trace_display_indices = self._downsample_indices(
+                len(self.trace_selected),
+                trace_width,
+            )
+            self.line_ax.plot(
+                self.times[trace_display_indices].astype(np.float32),
+                np.asarray(self.trace_selected)[trace_display_indices].astype(
+                    np.float32
+                ),
+            )
             self.line_ax.set_xlabel(self.trace_xlabel)
             self.line_ax.set_ylabel(self.trace_ylabel)
 
@@ -3167,7 +3969,11 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
             self.line_ax.set_xlabel(self.hist_xlabel)
             self.line_ax.set_ylabel(self.hist_ylabel)
 
-        self.canvas.draw_idle()
+        configure_transparent_matplotlib_canvas(
+            self.trace_figure,
+            self.trace_canvas,
+        )
+        self.trace_canvas.draw_idle()
 
     def on_right_click(self, event):
         if event.button == 3:
@@ -3437,6 +4243,7 @@ class TracesFitter:
         plot_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
+        configure_transparent_matplotlib_canvas(self.fig, self.canvas)
         self.canvas_widget = self.canvas.get_tk_widget()
         self.canvas_widget.pack(fill=tk.BOTH, expand=True)
 
@@ -3785,6 +4592,7 @@ class UtilityLinePlotter:
 
         # Create canvas for matplotlib figure
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
+        configure_transparent_matplotlib_canvas(self.fig, self.canvas)
         self.canvas_widget = self.canvas.get_tk_widget()
         self.canvas_widget.pack(fill=tk.BOTH, expand=True)
 
