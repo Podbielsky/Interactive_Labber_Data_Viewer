@@ -42,6 +42,7 @@ from plot_style import (
     AVAILABLE_COLORMAPS,
     COLOR_CYCLE_OPTIONS,
     DEFAULT_PLOT_STYLE,
+    configure_transparent_matplotlib_canvas,
     get_color_cycle,
     normalize_plot_style,
     open_plot_style_dialog,
@@ -63,55 +64,6 @@ def format_hdf5_label(label):
     if isinstance(label, (bytes, np.bytes_)):
         return label.decode('utf-8', errors='replace')
     return str(label)
-
-
-def configure_transparent_matplotlib_canvas(
-    figure,
-    canvas,
-    opaque_for_blitting=False,
-):
-    """Blend an embedded Matplotlib figure into the active ttk theme."""
-    style = ttk.Style()
-    background = (
-        style.lookup('TFrame', 'background')
-        or style.lookup('.', 'background')
-        or 'white'
-    )
-    foreground = (
-        style.lookup('TLabel', 'foreground')
-        or style.lookup('.', 'foreground')
-        or 'black'
-    )
-
-    # Keep newly created axes and axes reset by ``clear()`` transparent and
-    # readable in the current light or dark ttkbootstrap theme.
-    matplotlib.rcParams['figure.facecolor'] = 'none'
-    matplotlib.rcParams['axes.facecolor'] = 'none'
-    matplotlib.rcParams['axes.edgecolor'] = foreground
-    matplotlib.rcParams['axes.labelcolor'] = foreground
-    matplotlib.rcParams['text.color'] = foreground
-    matplotlib.rcParams['xtick.color'] = foreground
-    matplotlib.rcParams['ytick.color'] = foreground
-
-    figure.patch.set_facecolor(background if opaque_for_blitting else 'none')
-    figure.patch.set_alpha(1.0 if opaque_for_blitting else 0.0)
-    for axis in figure.axes:
-        axis.set_facecolor(background if opaque_for_blitting else 'none')
-        axis.patch.set_alpha(1.0 if opaque_for_blitting else 0.0)
-        axis.tick_params(axis='both', colors=foreground)
-        axis.xaxis.label.set_color(foreground)
-        axis.yaxis.label.set_color(foreground)
-        axis.title.set_color(foreground)
-        for spine in axis.spines.values():
-            spine.set_color(foreground)
-
-    # Tk canvases cannot inherit a truly transparent widget background. Match
-    # it to the ttk frame beneath the alpha-enabled Agg image instead.
-    canvas.get_tk_widget().configure(
-        background=background,
-        highlightthickness=0,
-        borderwidth=0,
-    )
 
 
 def _normalized_grid_variation(grid, axis):
@@ -1271,6 +1223,7 @@ class InteractiveArrayPlotter:
             artist = getattr(self, artist_name, None)
             if artist is not None:
                 artist.set_color(line_color)
+        self._apply_crosshair_overlay_color()
 
         if (
             hasattr(self, 'sliced_data')
@@ -1718,6 +1671,7 @@ class InteractiveArrayPlotter:
     def _ensure_crosshair_overlay(self):
         """Create outlined Tk crosshair lines above the static map bitmap."""
         tk_canvas = self.canvas.get_tk_widget()
+        line_color = self._current_plot_line_color()
         if self.crosshair_horizontal_shadow_item is None:
             self.crosshair_horizontal_shadow_item = tk_canvas.create_line(
                 0,
@@ -1746,7 +1700,7 @@ class InteractiveArrayPlotter:
                 0,
                 0,
                 0,
-                fill='white',
+                fill=line_color,
                 width=1,
                 dash=(4, 3),
                 state='hidden',
@@ -1757,12 +1711,25 @@ class InteractiveArrayPlotter:
                 0,
                 0,
                 0,
-                fill='white',
+                fill=line_color,
                 width=1,
                 dash=(4, 3),
                 state='hidden',
             )
         self._raise_map_overlay_items()
+
+    def _apply_crosshair_overlay_color(self):
+        """Apply the shared line preference to existing native guides."""
+        if not hasattr(self, 'canvas'):
+            return
+        tk_canvas = self.canvas.get_tk_widget()
+        line_color = self._current_plot_line_color()
+        for item in (
+            getattr(self, 'crosshair_horizontal_item', None),
+            getattr(self, 'crosshair_vertical_item', None),
+        ):
+            if item is not None:
+                tk_canvas.itemconfigure(item, fill=line_color)
 
     def _set_crosshair_overlay_state(self, state):
         visible = state != 'hidden'

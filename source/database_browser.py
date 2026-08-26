@@ -10,7 +10,11 @@ import numpy as np
 import ttkbootstrap as ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-from plot_style import normalize_plot_style
+from plot_style import (
+    configure_transparent_matplotlib_canvas,
+    normalize_plot_style,
+    resolve_plot_color,
+)
 
 class DatabaseBrowser:
     """Display the database directory tree, previews, stars, and comments."""
@@ -155,6 +159,7 @@ class DatabaseBrowser:
         self.preview_canvas = FigureCanvasTkAgg(
             self.preview_figure, master=right_frame
         )
+        self.refresh_theme_style(redraw=False)
         self.preview_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
         metadata_frame = ttk.LabelFrame(right_frame, text='Measurement notes')
@@ -189,6 +194,15 @@ class DatabaseBrowser:
             bootstyle='success',
         )
         self.save_comment_button.pack(anchor='e', padx=6, pady=(0, 6))
+
+    def refresh_theme_style(self, redraw=True):
+        """Blend the preview figure into the active ttkbootstrap theme."""
+        configure_transparent_matplotlib_canvas(
+            self.preview_figure,
+            self.preview_canvas,
+        )
+        if redraw:
+            self.preview_canvas.draw_idle()
 
     def refresh_records(self):
         """Reload the Treeview from SQLite without rescanning the filesystem."""
@@ -384,6 +398,7 @@ class DatabaseBrowser:
             transform=preview_axis.transAxes,
         )
         preview_axis.set_axis_off()
+        self.refresh_theme_style(redraw=False)
         self.preview_canvas.draw_idle()
 
         preview_request = (request_number, record)
@@ -459,7 +474,9 @@ class DatabaseBrowser:
             self.preview_axis.plot(
                 line_x[finite_points],
                 line_z[finite_points],
-                color='#1f77b4',
+                color=resolve_plot_color(
+                    self.plot_style['crosshair_histogram_color']
+                ),
                 linewidth=1.2,
             )
             self.preview_axis.set_xlabel(preview.x_label)
@@ -482,6 +499,7 @@ class DatabaseBrowser:
             self.preview_figure.colorbar(
                 preview_image, ax=self.preview_axis, label=preview.z_label
             )
+        self.refresh_theme_style(redraw=False)
         self.preview_canvas.draw_idle()
         self.previewed_measurement_id = measurement_id
         self.current_preview = preview
@@ -493,18 +511,31 @@ class DatabaseBrowser:
             )
 
     def set_plot_style(self, plot_style):
-        """Apply a new preferred colormap to the current map preview."""
+        """Apply preferred map and line colors to the current preview."""
         normalized_style = normalize_plot_style(plot_style)
         colormap_changed = (
             normalized_style['preferred_colormap']
             != self.plot_style['preferred_colormap']
         )
+        line_color_changed = (
+            resolve_plot_color(
+                normalized_style['crosshair_histogram_color']
+            )
+            != resolve_plot_color(
+                self.plot_style['crosshair_histogram_color']
+            )
+        )
         self.plot_style = normalized_style
         if (
-            colormap_changed
-            and self.current_preview is not None
+            self.current_preview is not None
             and self.previewed_measurement_id is not None
-            and not self.current_preview.is_linecut
+            and (
+                (self.current_preview.is_linecut and line_color_changed)
+                or (
+                    not self.current_preview.is_linecut
+                    and colormap_changed
+                )
+            )
         ):
             self._display_preview(
                 self.previewed_measurement_id,
@@ -526,6 +557,7 @@ class DatabaseBrowser:
             transform=self.preview_axis.transAxes,
         )
         self.preview_axis.set_axis_off()
+        self.refresh_theme_style(redraw=False)
         self.preview_canvas.draw_idle()
         self.previewed_measurement_id = measurement_id
         self.current_preview = None

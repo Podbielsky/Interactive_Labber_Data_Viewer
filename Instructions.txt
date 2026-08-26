@@ -104,9 +104,10 @@ Changing the interface style
 - Selecting a colormap directly in a map plotter also updates the saved
   preferred colormap. The extracted-linecut window has a Color cycle selector
   that changes existing curves and saves the selection.
-- Database-browser map previews use the same preferred colormap. Changing the
-  preference also redraws a map preview in an already-open browser; one-axis
-  database previews remain line plots.
+- Database-browser map previews use the same preferred colormap, and one-axis
+  line previews use the shared crosshair-linecut/histogram color. Changing the
+  relevant preference redraws an already-open preview. Preview canvases also
+  blend into the currently selected light or dark interface theme.
 - Color choices include the standard Matplotlib Tableau colors and palettes,
   together with colors and cycles inspired by Viridis, Plasma, Inferno,
   Cividis, BiMap, NeonPiCy, RedMap, and BlueMap. The dialog contains a preview

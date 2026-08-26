@@ -119,6 +119,10 @@ change in v0.4.8
   so fresh installations include the plotting-preference module
 - applied the preferred colormap to database-browser map previews and refresh
   an already-open map preview when the global plotting style changes
+- made database-browser preview canvases transparent and theme-matched, and
+  applied live shared-line-color changes to one-axis browser previews
+- applied the shared line-color preference to the native crosshair guides
+  instead of retaining their previous hard-coded white foreground
 - added extracted-linecut cycles generated from every installed standard
   ttkbootstrap theme's semantic color palette
 - added Displayed Data > Re-arrange Scan Axes for measurements with at least

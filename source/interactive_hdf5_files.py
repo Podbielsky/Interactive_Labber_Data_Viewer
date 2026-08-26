@@ -244,6 +244,16 @@ def change_application_style(root, theme_variable, theme_name):
         )
         return
 
+    for browser in getattr(root, '_labber_database_browsers', []):
+        try:
+            browser_is_open = (
+                not browser.closed and bool(browser.window.winfo_exists())
+            )
+        except (AttributeError, tk.TclError):
+            browser_is_open = False
+        if browser_is_open:
+            browser.refresh_theme_style()
+
     try:
         save_application_style(theme_name)
     except OSError as error:

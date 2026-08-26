@@ -3,9 +3,59 @@
 import tkinter as tk
 from tkinter import messagebox
 
+import matplotlib
 from matplotlib.colors import is_color_like
 import ttkbootstrap as ttk
 from ttkbootstrap.themes.standard import STANDARD_THEMES
+
+
+def configure_transparent_matplotlib_canvas(
+    figure,
+    canvas,
+    opaque_for_blitting=False,
+):
+    """Blend an embedded Matplotlib figure into the active ttk theme."""
+    style = ttk.Style()
+    background = (
+        style.lookup('TFrame', 'background')
+        or style.lookup('.', 'background')
+        or 'white'
+    )
+    foreground = (
+        style.lookup('TLabel', 'foreground')
+        or style.lookup('.', 'foreground')
+        or 'black'
+    )
+
+    # Keep newly created axes and axes reset by ``clear()`` transparent and
+    # readable in the current light or dark ttkbootstrap theme.
+    matplotlib.rcParams['figure.facecolor'] = 'none'
+    matplotlib.rcParams['axes.facecolor'] = 'none'
+    matplotlib.rcParams['axes.edgecolor'] = foreground
+    matplotlib.rcParams['axes.labelcolor'] = foreground
+    matplotlib.rcParams['text.color'] = foreground
+    matplotlib.rcParams['xtick.color'] = foreground
+    matplotlib.rcParams['ytick.color'] = foreground
+
+    figure.patch.set_facecolor(background if opaque_for_blitting else 'none')
+    figure.patch.set_alpha(1.0 if opaque_for_blitting else 0.0)
+    for axis in figure.axes:
+        axis.set_facecolor(background if opaque_for_blitting else 'none')
+        axis.patch.set_alpha(1.0 if opaque_for_blitting else 0.0)
+        axis.tick_params(axis='both', colors=foreground)
+        axis.xaxis.label.set_color(foreground)
+        axis.yaxis.label.set_color(foreground)
+        axis.title.set_color(foreground)
+        for spine in axis.spines.values():
+            spine.set_color(foreground)
+
+    # Tk canvases cannot inherit a truly transparent widget background. Match
+    # it to the ttk frame beneath the alpha-enabled Agg image instead.
+    canvas.get_tk_widget().configure(
+        background=background,
+        highlightthickness=0,
+        borderwidth=0,
+    )
 
 
 AVAILABLE_COLORMAPS = (
