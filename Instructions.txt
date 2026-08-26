@@ -231,18 +231,24 @@ Re-arranging multidimensional scan axes
   remaining scan axis becomes a fixed-value selector on the left side of the
   map. With exactly three scan axes, the unassigned axis is therefore the
   additional selector.
-- In Plot Map with Trace Data only, the X-axis list additionally contains
-  "Time (s) (trace samples)". Select it and choose any scan axis as Y to build
-  a time-versus-scan map: the trace time/sample coordinate is X, the selected
-  scan coordinate is Y, and the stored trace amplitude is the map value. Every
-  other scan dimension becomes a fixed-value selector. The normal data-channel
+- In Plot Map with Trace Data only, the X-axis list additionally contains the
+  stored trace X-axis label followed by "(trace samples)". Select it and choose
+  any scan axis as Y to build a trace-X-versus-scan map: the trace coordinate
+  is X, the selected scan coordinate is Y, and the stored trace amplitude is
+  the map value. The trace coordinate can represent time, frequency, voltage,
+  energy, or any other quantity; it does not need to be named Time. Every other
+  scan dimension becomes a fixed-value selector. The normal data-channel
   selector is disabled in this mode because the displayed values come directly
-  from the Traces/Data dataset; it is restored when scan axes are selected
-  again.
+  from the discovered three-dimensional trace dataset; it is restored when
+  scan axes are selected again.
 - Trace-axis maps require the standard Labber trace layout
-  (trace_length, 1, trace_count), one trace for every scan point, and a valid
-  trace spacing value. Only traces belonging to the selected Y line and fixed
-  additional-axis values are read, rather than loading all traces in the file.
+  (trace_length, 1, trace_count) and one trace for every scan point. The trace
+  dataset and containing group can have arbitrary names. An explicit one-
+  dimensional axis dataset with trace_length values is used when available;
+  its dataset name or label attribute becomes the displayed axis label. Legacy
+  two-value start/spacing metadata and a sample-index fallback are also
+  supported. Only traces belonging to the selected Y line and fixed additional-
+  axis values are read, rather than loading all traces in the file.
 - Select Apply to reload the chosen two-dimensional plane from the original
   measurement arrays. Existing ROI corners, drawn lines, crosshair positions,
   and undo snapshots are cleared because their coordinates belong to the
@@ -288,7 +294,7 @@ Map rendering, crosshairs, and numerical precision
   active ttk theme: TkAgg needs those opaque cached pixels to erase the previous
   blitted curve without leaving trails. The result still blends into the GUI
   instead of showing a separate white plotting canvas.
-- In the map-with-traces viewer, the selected time trace also uses an
+- In the map-with-traces viewer, the selected trace also uses an
   independent canvas, so changing the selected trace does not repaint the map.
 
 

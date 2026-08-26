@@ -21,6 +21,16 @@ class DatabaseBrowser:
 
     PREVIEW_MAX_POINTS_PER_AXIS = 256
 
+    @staticmethod
+    def _record_tree_values(record):
+        """Return the visible database-tree columns for one measurement."""
+        return (
+            '★' if record.starred else '',
+            record.data_channel,
+            ' × '.join(str(value) for value in record.step_dimensions),
+            '✓' if record.has_traces else '',
+        )
+
     def __init__(
         self,
         parent,
@@ -89,17 +99,25 @@ class DatabaseBrowser:
         tree_frame.pack(fill=tk.BOTH, expand=True)
         self.tree = ttk.Treeview(
             tree_frame,
-            columns=('star', 'channel', 'dimensions'),
+            columns=('star', 'channel', 'dimensions', 'traces'),
             selectmode='browse',
         )
         self.tree.heading('#0', text='Directory / Measurement', anchor='w')
         self.tree.heading('star', text='★', anchor='center')
         self.tree.heading('channel', text='Data channel', anchor='w')
         self.tree.heading('dimensions', text='Shape', anchor='w')
+        self.tree.heading('traces', text='Traces', anchor='center')
         self.tree.column('#0', width=280, minwidth=180)
         self.tree.column('star', width=38, minwidth=38, stretch=False, anchor='center')
         self.tree.column('channel', width=120, minwidth=80)
         self.tree.column('dimensions', width=90, minwidth=60)
+        self.tree.column(
+            'traces',
+            width=55,
+            minwidth=50,
+            stretch=False,
+            anchor='center',
+        )
         tree_scrollbar = ttk.Scrollbar(
             tree_frame, orient=tk.VERTICAL, command=self.tree.yview
         )
@@ -241,11 +259,7 @@ class DatabaseBrowser:
                 parent_item,
                 'end',
                 text=record.file_name,
-                values=(
-                    '★' if record.starred else '',
-                    record.data_channel,
-                    ' × '.join(str(value) for value in record.step_dimensions),
-                ),
+                values=self._record_tree_values(record),
             )
             self.tree_items_by_measurement[record.measurement_id] = tree_item
 

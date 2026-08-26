@@ -142,3 +142,9 @@ change in v0.4.8
   original three-scan-axis minimum in the ordinary map plotter
 - load only the trace rows selected by the chosen Y and fixed scan dimensions,
   and retain correct trace-to-scan ordering for multidimensional measurements
+- discover trace groups and (trace_length, 1, trace_count) datasets by structure
+  instead of relying on the group name, dataset names, or HDF5 creation order
+- support arbitrarily named explicit trace X-axis datasets and legacy start/
+  spacing metadata without forcing the displayed axis to be called Time
+- show a Traces indicator directly in the database tree and immediately fill
+  and refresh HDF5 trees when adding traces from another file

@@ -1289,7 +1289,7 @@ def data_menu_bar(root, hdf5data):
     file.add_separator()
     file.add_command(label='Remove Selected Datasets', command=lambda: remove_selected_options_window(root, hdf5data)) #Hannah Vogel: to select datasets to be removed
     file.add_separator()
-    file.add_command(label='Add Traces from HDF5 File', command=lambda: add_traces_window(hdf5data)) # Nico Reinders: to add traces to current file from another HDF5 file
+    file.add_command(label='Add Traces from HDF5 File', command=lambda: add_traces_window(hdf5data, root)) # Nico Reinders: to add traces to current file from another HDF5 file
     file.add_command(label='Generate Traces from Dataset', command=lambda: transform_traces_window(hdf5data)) # Nico Reinders: create a file with a 'Traces' group that is compatible with the interactive data viewer 
     
     data = ttk.Menu(menubar, tearoff=0)
@@ -1365,7 +1365,12 @@ def get_unique_filename(filepath):
     return new_filepath
 
 
-def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
+def apply_reshape(
+    selected_dataset,
+    selected_axis_dataset,
+    dimension_index,
+    selected_axis_name=None,
+):
     """
     Added by Nico Reinders
     Reshapes the selected dataset to be compatible with the requirements of the data viewer "Plot Map with Trace Data"
@@ -1379,6 +1384,8 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
         selected_dataset = np.array([selected_dataset])
         dimension_index += 1
 
+    trace_axis_values = None
+    trace_axis_label = selected_axis_name or 'Trace sample'
     if selected_axis_dataset is None:  # if no dataset is selected for the x-axis, use default values
         t0, dt = 0, 1
         print("No axis dataset selected, using default t0=0 and dt=1.")
@@ -1391,7 +1398,8 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
 
         arr = np.ravel(arr)  # flatten
 
-        if arr.ndim == 1 and arr.size >= 2:  # Check if the axis dataset is 1D and has at least 2 elements
+        if arr.size >= 2:  # Check if the axis dataset has at least 2 elements
+            trace_axis_values = arr.astype(np.float64, copy=False)
             t0 = arr[0]
             diffs = np.diff(arr)
             dt = np.min(np.abs(diffs))
@@ -1409,6 +1417,13 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
     selected_dataset = np.reshape(selected_dataset, (selected_dataset.shape[0], 1, -1))  # Reshape to required shape
     shape = selected_dataset.shape
     print(f"Shape of spectra: {shape}")
+    if trace_axis_values is None or trace_axis_values.size != shape[0]:
+        trace_axis_values = t0 + dt * np.arange(shape[0], dtype=np.float64)
+        if selected_axis_dataset is not None:
+            print(
+                'Warning: selected trace axis length does not match the trace '
+                'dimension; using an evenly spaced trace axis.'
+            )
         
     # Validate shape_original dimensions
     if len(shape_original) < 2:
@@ -1440,6 +1455,11 @@ def apply_reshape(selected_dataset, selected_axis_dataset, dimension_index):
         traces_grp.create_dataset('Data', data=selected_dataset)
         traces_grp.create_dataset('Data_N', data=[shape[0]])
         traces_grp.create_dataset('Alazar Slytherin - Ch1 - Data_t0dt', data=[[t0, dt]])
+        trace_axis_dataset = traces_grp.create_dataset(
+            'Trace axis',
+            data=trace_axis_values,
+        )
+        trace_axis_dataset.attrs['label'] = trace_axis_label
 
         data_grp = out_file.create_group('Data')
         data_grp.attrs['Step dimensions'] = [reduced_shape[0], reduced_shape[1]]
@@ -1622,13 +1642,36 @@ def transform_traces_window(hdf5Data):
         confirm_button = ttk.Button(
             button_frame,
             text="Confirm Reshape",
-            command=lambda: (apply_reshape(dataset_map[dataset_selection.get()], axis_map[axis_selection.get()], int(dimension_index.get())), transform_options.destroy())
+            command=lambda: (
+                apply_reshape(
+                    dataset_map[dataset_selection.get()],
+                    axis_map[axis_selection.get()],
+                    int(dimension_index.get()),
+                    (
+                        axis_selection.get().rsplit('/', 1)[-1]
+                        if axis_selection.get() != 'None'
+                        else None
+                    ),
+                ),
+                transform_options.destroy(),
+            )
         )
     else:
         confirm_button = ttk.Button(
             button_frame,
             text="Confirm Reshape",
-            command=lambda: (apply_reshape(arr, axis_arr, int(dimension_index.get())), transform_options.destroy())
+            command=lambda: (
+                apply_reshape(
+                    arr,
+                    axis_arr,
+                    int(dimension_index.get()),
+                    (
+                        os.path.splitext(os.path.basename(axis_path))[0]
+                        if axis_path else None
+                    ),
+                ),
+                transform_options.destroy(),
+            )
         )
     confirm_button.pack(side='left', padx=5)
 
@@ -1638,7 +1681,7 @@ def transform_traces_window(hdf5Data):
     
     
     
-def add_traces_window(hdf5Data):
+def add_traces_window(hdf5Data, parent=None):
     """
     Added by Nico Reinders
     Opens a window to select a file to copy groups or datasets from
@@ -1647,6 +1690,8 @@ def add_traces_window(hdf5Data):
     """
     
     pth = filedialog.askopenfilename(filetypes=[("HDF5 files", "*.hdf5")])
+    if not pth:
+        return None
     traces_hdf5Data = HDF5Data(wdir=pth)
     traces_hdf5Data.set_path(pth, 'r')
     
@@ -1664,6 +1709,13 @@ def add_traces_window(hdf5Data):
 
     # show treeview of the source file
     traces_tree = display_hdf5_file(traces_selection_window, traces_hdf5Data)
+    source_opener = getattr(
+        traces_selection_window,
+        '_labber_open_hdf5_path',
+        None,
+    )
+    if source_opener is not None:
+        source_opener(pth)
 
     def copy_selected_dataset():
         """
@@ -1737,6 +1789,14 @@ def add_traces_window(hdf5Data):
         else:
             print("Invalid Selection", "Selected item is neither a group nor a dataset.")
             return
+
+        destination_opener = getattr(
+            parent,
+            '_labber_open_hdf5_path',
+            None,
+        )
+        if destination_opener is not None and hdf5Data.readpath:
+            destination_opener(hdf5Data.readpath)
 
     # Add a button to trigger the copy
     copy_button = ttk.Button(traces_selection_window, text="Copy Selected Dataset(s)", command=copy_selected_dataset)
@@ -2414,7 +2474,7 @@ def display_hdf5_file(root, hdf5Data):
         TkinterDnD.require(root)
         tree.drop_target_register(DND_FILES)
         tree.dnd_bind('<<Drop>>', on_data_file_drop)
-    except (RuntimeError, tk.TclError) as error:
+    except (AttributeError, RuntimeError, tk.TclError) as error:
         drop_label.configure(
             text=(
                 'Drag and drop is unavailable; HDF5 files can still be opened '

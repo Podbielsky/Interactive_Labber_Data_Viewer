@@ -41,6 +41,122 @@ def _read_hdf5_names(dataset):
     return [_decode_hdf5_text(value) for value in values]
 
 
+def _trace_data_candidates(group):
+    """Return datasets that use the supported trace_length × 1 × count layout."""
+    return [
+        dataset
+        for dataset in group.values()
+        if (
+            isinstance(dataset, h5py.Dataset)
+            and dataset.ndim == 3
+            and dataset.shape[1] == 1
+            and dataset.shape[0] > 0
+            and dataset.shape[2] > 0
+        )
+    ]
+
+
+def find_trace_group(hdf5_file):
+    """Find a compatible trace group without relying on one exact group name."""
+    preferred_groups = []
+    for name, item in hdf5_file.items():
+        if (
+            isinstance(item, h5py.Group)
+            and name.casefold() in {'trace', 'traces'}
+        ):
+            preferred_groups.append(item)
+    for group in preferred_groups:
+        if _trace_data_candidates(group):
+            return group
+
+    discovered_groups = []
+
+    def visitor(_name, item):
+        if (
+            isinstance(item, h5py.Group)
+            and _trace_data_candidates(item)
+        ):
+            discovered_groups.append(item)
+
+    hdf5_file.visititems(visitor)
+    return discovered_groups[0] if discovered_groups else None
+
+
+def find_trace_data_dataset(trace_group, expected_trace_count=None):
+    """Select the trace-value dataset by shape rather than HDF5 key order."""
+    candidates = _trace_data_candidates(trace_group)
+    if not candidates:
+        raise ValueError(
+            'No trace dataset with shape (trace_length, 1, trace_count) was found.'
+        )
+    if expected_trace_count is not None:
+        matching_candidates = [
+            dataset
+            for dataset in candidates
+            if dataset.shape[2] == int(expected_trace_count)
+        ]
+        if matching_candidates:
+            candidates = matching_candidates
+    return max(candidates, key=lambda dataset: int(np.prod(dataset.shape)))
+
+
+def _trace_axis_label(dataset, fallback):
+    """Return a readable axis label from optional HDF5 metadata."""
+    for attribute_name in ('label', 'axis_name', 'name', 'long_name'):
+        if attribute_name in dataset.attrs:
+            label = _decode_hdf5_text(dataset.attrs[attribute_name]).strip()
+            if label:
+                return label
+    dataset_name = dataset.name.rsplit('/', 1)[-1].strip()
+    return dataset_name or fallback
+
+
+def read_trace_axis(trace_group, trace_data_dataset):
+    """Read an arbitrary explicit trace axis or reconstruct a legacy one."""
+    trace_length = int(trace_data_dataset.shape[0])
+    explicit_axis_candidates = []
+    legacy_axis_candidates = []
+    for dataset in trace_group.values():
+        if not isinstance(dataset, h5py.Dataset) or dataset == trace_data_dataset:
+            continue
+        dataset_name = dataset.name.casefold()
+        if (
+            dataset.size == trace_length
+            and dataset.ndim <= 2
+            and 't0dt' not in dataset_name
+            and not dataset_name.endswith('_n')
+        ):
+            explicit_axis_candidates.append(dataset)
+        elif dataset.size == 2:
+            legacy_axis_candidates.append(dataset)
+
+    if explicit_axis_candidates:
+        axis_dataset = explicit_axis_candidates[0]
+        axis_values = np.asarray(axis_dataset[()]).reshape(-1)
+        return (
+            axis_values.astype(np.float64, copy=False),
+            _trace_axis_label(axis_dataset, 'Trace X'),
+        )
+
+    if legacy_axis_candidates:
+        metadata_dataset = next(
+            (
+                dataset
+                for dataset in legacy_axis_candidates
+                if 't0dt' in dataset.name.casefold()
+            ),
+            legacy_axis_candidates[0],
+        )
+        start, spacing = np.asarray(metadata_dataset[()]).reshape(-1)[:2]
+        axis_values = float(start) + float(spacing) * np.arange(trace_length)
+        label = _trace_axis_label(metadata_dataset, 'Trace X')
+        if 't0dt' in label.casefold():
+            label = 'Trace X'
+        return axis_values, label
+
+    return np.arange(trace_length, dtype=np.float64), 'Trace sample'
+
+
 def inspect_viewer_hdf5(path):
     """Validate a Labber/viewer-compatible HDF5 file and return its metadata."""
     normalized_path = os.path.abspath(os.path.expanduser(path))
@@ -105,7 +221,7 @@ def inspect_viewer_hdf5(path):
                 'log_names': logged_channels,
                 'step_dimensions': step_dimensions,
                 'data_shape': tuple(data_dataset.shape),
-                'has_traces': 'Traces' in hdf5_file,
+                'has_traces': find_trace_group(hdf5_file) is not None,
             }
     except OSError as error:
         raise ValueError(f'Could not read the HDF5 file: {error}') from error
@@ -338,13 +454,16 @@ class HDF5Data:
         Trace data arrays.
 
         traces_time (numpy.array):
-        Time data for traces.
+            X-axis coordinate for traces (time, frequency, voltage, etc.).
+
+        trace_axis_name (str):
+            Display label for the trace X-axis.
 
         trace_order (numpy.array):
         Order of traces
 
         traces_dt (float):
-        Time interval between traces.
+            Representative spacing between trace X-axis samples.
 
         trace_reference (numpy.array):
         Reference for trace data.
@@ -407,7 +526,8 @@ class HDF5Data:
             Loads and sets the trace data from the HDF5 file into memory.
 
         set_traces_dt():
-            Sets the time interval between traces based on the HDF5 file metadata.
+            Loads the trace X-axis and its representative sample spacing from
+            the HDF5 file metadata.
 
         save_traces_in_wdir():
             Saves trace data into the working directory specified by the wdir attribute.
@@ -438,7 +558,8 @@ class HDF5Data:
     def __init__(self, wdir=None, readpath=None, file=None, file_name=None, arrays=None, array_tags=None,
                  measure_axis=None, name_axis=None, measure_data=None, name_data=None, measure_dim=None,
                  shape_data=None, current_h5dir=None, savepath=None, traces=None, shape_trace=None, trace_time=None,
-                 trace_order=None, traces_dt=None, trace_reference=None, hist=None, bins=None):
+                 trace_order=None, traces_dt=None, trace_reference=None, hist=None, bins=None,
+                 trace_axis_name=None, trace_group_path=None):
 
         self.readpath = readpath
         self.shape_data = shape_data
@@ -458,6 +579,8 @@ class HDF5Data:
         self.savepath = savepath
         self.traces = traces
         self.traces_time = trace_time
+        self.trace_axis_name = trace_axis_name
+        self.trace_group_path = trace_group_path
         self.traces_dt = traces_dt
         self.trace_order = trace_order
         self.trace_reference = trace_reference
@@ -477,6 +600,45 @@ class HDF5Data:
             self.file = h5py.File(self.readpath, "r+")
         except Exception as e:
             print(f"Error setting HDF5 data: {e}")
+
+    def get_trace_group(self):
+        """Return the compatible trace group in the currently open file."""
+        if self.file is None:
+            self.set_data()
+        trace_group = find_trace_group(self.file)
+        if trace_group is None:
+            raise ValueError('The HDF5 file does not contain compatible traces.')
+        self.trace_group_path = trace_group.name
+        return trace_group
+
+    def has_traces(self):
+        """Return whether the current file contains a compatible trace group."""
+        try:
+            self.get_trace_group()
+        except (OSError, ValueError):
+            return False
+        return True
+
+    def get_trace_data_dataset(self):
+        """Return the trace-value dataset independent of its stored name."""
+        expected_trace_count = None
+        if self.measure_dim is not None:
+            expected_trace_count = int(np.prod(self.measure_dim))
+        return find_trace_data_dataset(
+            self.get_trace_group(),
+            expected_trace_count=expected_trace_count,
+        )
+
+    def get_trace_axis(self, trace_length=None):
+        """Return the stored or reconstructed trace X coordinate."""
+        if self.traces_time is None:
+            self.set_traces_dt()
+        axis_values = np.asarray(self.traces_time, dtype=np.float64)
+        if trace_length is not None and axis_values.size != int(trace_length):
+            raise ValueError(
+                'The trace X-axis length does not match the trace data length.'
+            )
+        return axis_values
 
     #  Hannah Vogel
     def skip_selected_objects_recursive_in_copying_process(self, src, dest, selected_options):
@@ -587,8 +749,7 @@ class HDF5Data:
     def set_trace_shape(self):
         try:
             self.set_data()
-            trace_keys = list(self.file['Traces'].keys())
-            self.shape_trace = np.shape(self.file[f'Traces/{trace_keys[0]}'])
+            self.shape_trace = tuple(self.get_trace_data_dataset().shape)
         except Exception as e:
             print(f"Error getting shape of data: {e}")
 
@@ -742,29 +903,53 @@ class HDF5Data:
     def set_traces(self):
         try:
             self.set_data()
-            self.set_data_shape()
-            trace_keys = list(self.file['Traces'].keys())
-            traces_i = (
-                np.array(self.file[f'Traces/{trace_keys[0]}'], dtype=np.float32).swapaxes(0, 2).flatten()).reshape(
-                int(self.shape_data[0] * self.shape_data[-1]),
-                np.array(self.file[f'Traces/{trace_keys[1]}'])[0])
-            self.traces = traces_i.reshape(self.shape_data[-1], self.shape_data[0],
-                                           np.array(self.file[f'Traces/{trace_keys[1]}'])[0])
+            if self.measure_dim is None:
+                self.set_measure_dim()
+            trace_dataset = self.get_trace_data_dataset()
+            trace_length = int(trace_dataset.shape[0])
+            trace_count = int(trace_dataset.shape[2])
+            expected_trace_count = int(np.prod(self.measure_dim))
+            if trace_count != expected_trace_count:
+                raise ValueError(
+                    f'Trace count {trace_count} does not match the '
+                    f'{expected_trace_count} scan points.'
+                )
+            traces_i = np.asarray(
+                trace_dataset,
+                dtype=np.float32,
+            ).swapaxes(0, 2).reshape(trace_count, trace_length)
+            self.traces = traces_i.reshape(
+                int(np.prod(self.measure_dim[1:])),
+                int(self.measure_dim[0]),
+                trace_length,
+            )
             traces_i = None
         except Exception as e:
             print(f"Error creating traces as array: {e}")
 
     def set_traces_dt(self):
-        trace_keys = list(self.file['Traces'].keys())
-
         if self.file is None:
             self.set_data()
-
-        if 'Alazar Slytherin - Ch1 - Data_t0dt' in self.file['Traces']: # changed by Nico Reinders
-
-            self.traces_dt = self.file['Traces']['Alazar Slytherin - Ch1 - Data_t0dt'][0][1]
+        trace_group = self.get_trace_group()
+        trace_dataset = self.get_trace_data_dataset()
+        axis_values, axis_name = read_trace_axis(
+            trace_group,
+            trace_dataset,
+        )
+        self.traces_time = axis_values
+        self.trace_axis_name = axis_name
+        if axis_values.size >= 2:
+            finite_steps = np.diff(axis_values)
+            finite_steps = finite_steps[
+                np.isfinite(finite_steps) & (finite_steps != 0)
+            ]
+            self.traces_dt = (
+                float(np.median(finite_steps))
+                if finite_steps.size
+                else 1.0
+            )
         else:
-            self.traces_dt = self.file[f'Traces/{trace_keys[0]}'][0][1]
+            self.traces_dt = 1.0
 
     def save_traces_in_wdir(self):
         if not self.saved_traces:
@@ -774,9 +959,12 @@ class HDF5Data:
                 self.set_measure_dim()
             trace_order_matrix = []
             should_array_shape = (int(self.measure_dim[0]), int(np.prod(np.array(self.measure_dim)[1:])))
-            trace_keys = list(self.file['Traces'].keys())
-            traces_i = (np.array(self.file[f'Traces/{trace_keys[0]}'], dtype=np.float32).swapaxes(0, 2).reshape(
-                int(np.prod(should_array_shape)), np.array(self.file[f'Traces/{trace_keys[1]}'])[0]))
+            trace_dataset = self.get_trace_data_dataset()
+            traces_i = (
+                np.asarray(trace_dataset, dtype=np.float32)
+                .swapaxes(0, 2)
+                .reshape(int(np.prod(should_array_shape)), trace_dataset.shape[0])
+            )
             save_path = self.wdir + '/traces'
             if not os.path.exists(save_path):
                 os.makedirs(save_path)
@@ -794,9 +982,14 @@ class HDF5Data:
         if self.measure_dim is None:
             self.set_measure_dim()
         should_array_shape = (int(self.measure_dim[0]), int(np.prod(np.array(self.measure_dim)[1:])))
-        trace_keys = list(self.file['Traces'].keys())
-        self.trace_reference = self.file[f'Traces/{trace_keys[0]}']
-        self.trace_order = np.reshape([i for i in range(self.trace_reference.shape[-1])], should_array_shape)
+        self.trace_reference = self.get_trace_data_dataset()
+        trace_count = int(self.trace_reference.shape[-1])
+        if trace_count != int(np.prod(should_array_shape)):
+            raise ValueError(
+                f'Trace count {trace_count} does not match the scan shape '
+                f'{tuple(self.measure_dim)}.'
+            )
+        self.trace_order = np.arange(trace_count).reshape(should_array_shape)
 
     def calc_hist(self, nbins):
         self.nbins = nbins
@@ -904,6 +1097,8 @@ class HDF5Data:
         self.savepath = None
         self.traces = None
         self.traces_time = None
+        self.trace_axis_name = None
+        self.trace_group_path = None
         self.trace_order = None
         self.saved_traces = False
         self.trace_reference = None

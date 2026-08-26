@@ -541,7 +541,7 @@ class InteractiveArrayPlotter:
         # Initialize attributes
         self.data = hdf5data
         #### Created by Nico Reinders  for trace loading validation
-        self.contains_traces = 'Traces' in list(hdf5data.file.keys())
+        self.contains_traces = hdf5data.has_traces()
         self.trace_axis_map_mode = False
         self._data_selection_before_trace_axis_map = None
         ####
@@ -1033,8 +1033,8 @@ class InteractiveArrayPlotter:
                 self.data.set_traces()
                 self.data.set_traces_dt()
                 self.traces = self.data.traces
-                self.times = self.data.traces_dt * np.arange(
-                    0, len(self.traces[0][0])
+                self.times = self.data.get_trace_axis(
+                    len(self.traces[0][0])
                 )
                 self.loaded = True
             if not self.calculated:
@@ -1069,10 +1069,7 @@ class InteractiveArrayPlotter:
         if trace_reference is None:
             raise ValueError('The measurement does not expose trace data.')
         trace_length = int(trace_reference.shape[0])
-        trace_x_values = np.asarray(
-            self.data.traces_dt * np.arange(trace_length),
-            dtype=np.float64,
-        )
+        trace_x_values = self.data.get_trace_axis(trace_length)
         return build_trace_axis_map(
             trace_reference,
             self._trace_order_scan_grid(),
@@ -2992,7 +2989,7 @@ class InteractiveArrayPlotter:
             self.data.set_traces()
             self.data.set_traces_dt()
             self.traces = self.data.traces
-            self.times = self.data.traces_dt * np.arange(0, len(self.traces[0][0]))
+            self.times = self.data.get_trace_axis(len(self.traces[0][0]))
             self.loaded = True
 
         self.frequencies_shifted, self.fft_mean, self.fft_signals, self.original_angles = get_fourier(self.traces,
@@ -4578,7 +4575,9 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
         self.trace_y_index = 0
 
         self.times = 0
-        self.trace_xlabel = 'Time (s)'
+        self.trace_xlabel = (
+            getattr(hdf5data, 'trace_axis_name', None) or 'Trace X'
+        )
         self.trace_ylabel = 'Trace Amplitude (V)'
 
         self.hist_xlabel = 'Amplitudes (V)'
@@ -4691,7 +4690,7 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
                 ][self.trace_x_index]
             )
         self.trace_selected = self.data.trace_reference[::, 0, trace_index]
-        self.times = self.data.traces_dt * np.arange(0, len(self.trace_selected))
+        self.times = self.data.get_trace_axis(len(self.trace_selected))
         self.line_ax.clear()
 
         if not self.enable_hist:
@@ -4780,7 +4779,11 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
         base_name, _ = os.path.splitext(self.data.file_name)
         trace_pos = f'{self.name_data_x_axis}_{self.X[self.trace_y_index][self.trace_x_index]:.3f}_{self.name_data_y_axis}_{self.Y[self.trace_y_index][self.trace_x_index]:.3f}'
         np.save(pth + base_name + 'trace_at_' + trace_pos + '.npy', self.trace_selected, allow_pickle=True)
-        np.save(pth + base_name + 'times_for_trace_at_' + trace_pos + '.npy', self.times, allow_pickle=True)
+        np.save(
+            pth + base_name + 'trace_axis_for_trace_at_' + trace_pos + '.npy',
+            self.times,
+            allow_pickle=True,
+        )
 
 
     def reset(self):
@@ -5007,7 +5010,9 @@ class TracesFitter:
         # Create matplotlib figure and axis
         self.fig = plt.Figure(figsize=(6, 5), dpi=100)
         self.ax = self.fig.add_subplot(111)
-        self.ax.set_xlabel('x')
+        self.ax.set_xlabel(
+            getattr(self.data, 'trace_axis_name', None) or 'Trace X'
+        )
         self.ax.set_ylabel('y')
 
 
@@ -5105,7 +5110,7 @@ class TracesFitter:
         # Get the selected trace
         self.trace_index = self.get_one_index(self.trace_x_index_var.get(), self.trace_y_index_var.get())
         self.trace_selected = self.data.trace_reference[::, 0, self.trace_index]
-        self.times = self.data.traces_dt * np.arange(0, len(self.trace_selected))
+        self.times = self.data.get_trace_axis(len(self.trace_selected))
 
         self.ax.clear() # Clear previous plot
         self.ax.plot(
@@ -5115,6 +5120,9 @@ class TracesFitter:
             color=resolve_plot_color(
                 self.plot_style['crosshair_histogram_color']
             ),
+        )
+        self.ax.set_xlabel(
+            getattr(self.data, 'trace_axis_name', None) or 'Trace X'
         )
         if (
             hasattr(self, 'fit_y')
