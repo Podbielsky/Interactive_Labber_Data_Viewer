@@ -148,3 +148,7 @@ change in v0.4.8
   spacing metadata without forcing the displayed axis to be called Time
 - show a Traces indicator directly in the database tree and immediately fill
   and refresh HDF5 trees when adding traces from another file
+- discover separate amplitude datasets such as Trace_I and Trace_V inside
+  Traces, as well as amplitudes stored in child groups below Traces
+- pair each amplitude with its matching *_N and *_t0dt metadata and keep its
+  X axis, plotting, analysis, fitting, and export isolated when switching

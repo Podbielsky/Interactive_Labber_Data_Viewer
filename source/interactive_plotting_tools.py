@@ -222,7 +222,11 @@ def reshape_trace_order_to_scan_grid(trace_order, measure_dim):
     return trace_order_array.reshape(tuple(reversed(dimensions)))
 
 
-def load_selected_trace_matrix(trace_reference, trace_indices):
+def load_selected_trace_matrix(
+    trace_reference,
+    trace_indices,
+    trace_length=None,
+):
     """Read selected Labber traces and return one trace per matrix row."""
     trace_indices = np.asarray(trace_indices, dtype=int).ravel()
     if trace_indices.size == 0:
@@ -237,8 +241,14 @@ def load_selected_trace_matrix(trace_reference, trace_indices):
         trace_indices,
         return_inverse=True,
     )
+    if trace_length is None:
+        trace_length = int(trace_reference.shape[0])
     selected_traces = np.asarray(
-        trace_reference[:, 0, unique_indices]
+        trace_reference[
+            :int(trace_length),
+            0,
+            unique_indices,
+        ]
     )
     if selected_traces.ndim == 1:
         selected_traces = selected_traces[:, np.newaxis]
@@ -252,6 +262,7 @@ def build_trace_axis_map(
     y_coordinate_grid,
     y_axis_index,
     fixed_axis_indices,
+    trace_length=None,
 ):
     """Build a [scan Y, trace X] map whose values are trace amplitudes."""
     trace_indices = slice_scan_vector_for_axis(
@@ -267,6 +278,7 @@ def build_trace_axis_map(
     trace_matrix = load_selected_trace_matrix(
         trace_reference,
         trace_indices,
+        trace_length=trace_length,
     )
     trace_x_values = np.asarray(trace_x_values)
     if trace_x_values.ndim != 1:
@@ -1060,7 +1072,7 @@ class InteractiveArrayPlotter:
         )
 
     def _trace_axis_map_arrays(self):
-        """Return trace time, selected scan coordinate, and trace amplitudes."""
+        """Return trace X, selected scan coordinate, and trace amplitudes."""
         if not self.supports_trace_axis_map:
             raise ValueError(
                 'Trace-axis maps are available only in the trace plotter.'
@@ -1068,7 +1080,7 @@ class InteractiveArrayPlotter:
         trace_reference = getattr(self.data, 'trace_reference', None)
         if trace_reference is None:
             raise ValueError('The measurement does not expose trace data.')
-        trace_length = int(trace_reference.shape[0])
+        trace_length = self.data.get_trace_sample_count()
         trace_x_values = self.data.get_trace_axis(trace_length)
         return build_trace_axis_map(
             trace_reference,
@@ -1077,6 +1089,7 @@ class InteractiveArrayPlotter:
             self._scan_coordinate_grid(self.y_scan_axis_index),
             self.y_scan_axis_index,
             self._selected_additional_index_map(),
+            trace_length=trace_length,
         )
 
     def _set_trace_axis_data_selector_state(self, enabled):
@@ -4573,14 +4586,23 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
 
         self.trace_x_index = 0
         self.trace_y_index = 0
+        self.trace_channels = list(hdf5data.get_trace_channels())
+        selected_trace_channel = hdf5data.get_selected_trace_channel()
+        self.trace_channel_identifiers = {
+            channel.label: channel.identifier
+            for channel in self.trace_channels
+        }
 
         self.times = 0
         self.trace_xlabel = (
             getattr(hdf5data, 'trace_axis_name', None) or 'Trace X'
         )
-        self.trace_ylabel = 'Trace Amplitude (V)'
+        self.trace_ylabel = (
+            selected_trace_channel.label
+            or 'Trace amplitude'
+        )
 
-        self.hist_xlabel = 'Amplitudes (V)'
+        self.hist_xlabel = self.trace_ylabel
         self.hist_ylabel = 'Counts'
         self.nbins_traces = 50
 
@@ -4608,6 +4630,35 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
         self.trace_menu.add_command(label="Toggle Histogram", command=self.open_hist_window)
         self.menubar.add_cascade(label="Traces Menu", menu=self.trace_menu)
 
+        self.trace_channel_frame = None
+        self.trace_channel_combobox = None
+        if len(self.trace_channels) > 1:
+            self.trace_channel_frame = ttk.LabelFrame(
+                self.frame2,
+                text='Trace amplitude',
+            )
+            self.trace_channel_frame.pack(side=tk.TOP, fill=tk.X, pady=2)
+            self.trace_channel_variable = tk.StringVar(
+                master=self.root,
+                value=self.trace_ylabel,
+            )
+            self.trace_channel_combobox = ttk.Combobox(
+                self.trace_channel_frame,
+                textvariable=self.trace_channel_variable,
+                values=[channel.label for channel in self.trace_channels],
+                state='readonly',
+                width=22,
+            )
+            self.trace_channel_combobox.pack(
+                fill=tk.X,
+                padx=4,
+                pady=4,
+            )
+            self.trace_channel_combobox.bind(
+                '<<ComboboxSelected>>',
+                self._on_trace_channel_selected,
+            )
+
         self.trace_frame = ttk.Frame(self.plot_area_frame, height=220)
         self.trace_frame.grid(row=2, column=0, sticky=tk.EW)
         self.trace_canvas = FigureCanvasTkAgg(
@@ -4622,6 +4673,71 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
 
         self.initialize_line_plot()
         self.update_line_plot()
+
+    def _on_trace_channel_selected(self, _event=None):
+        """Switch the active amplitude without loading unrelated channels."""
+        if self.trace_channel_combobox is None:
+            return
+        selected_label = self.trace_channel_combobox.get()
+        selected_identifier = self.trace_channel_identifiers[selected_label]
+        self.data.trace_loading_with_referance(selected_identifier)
+        self.data.set_traces_dt()
+        self.trace_xlabel = self.data.trace_axis_name or 'Trace X'
+        self.trace_ylabel = self.data.trace_channel_name or selected_label
+        self.hist_xlabel = self.trace_ylabel
+        self.loaded = False
+        self.calculated = False
+
+        if hasattr(self, 'fit_results_dict'):
+            fitted_names = set(self.fit_results_dict)
+            del self.fit_results_dict
+            remaining_values = [
+                value
+                for value in self.data_combobox['values']
+                if value not in fitted_names
+            ]
+            self.data_combobox.configure(values=remaining_values)
+            if self.data_combobox.get() in fitted_names and self.name_data:
+                self.data_combobox.set(self.name_data[0])
+
+        traces_fitter = getattr(self, 'traces_fitter', None)
+        if traces_fitter is not None:
+            try:
+                traces_fitter.root.destroy()
+            except tk.TclError:
+                pass
+            del self.traces_fitter
+
+        rearrange_window = getattr(self, 'rearrange_scan_axes_window', None)
+        if rearrange_window is not None:
+            try:
+                rearrange_window.destroy()
+            except tk.TclError:
+                pass
+            self.rearrange_scan_axes_window = None
+
+        if self.trace_axis_map_mode:
+            self._set_trace_axis_data_selector_state(True)
+            self.plot_data()
+        else:
+            self.update_line_plot()
+
+    def _read_selected_trace(self, trace_index):
+        """Read one trace from the currently selected amplitude channel."""
+        if hasattr(self.data, 'get_trace_values'):
+            return self.data.get_trace_values(trace_index)
+        sample_count = int(
+            getattr(
+                self.data,
+                'trace_sample_count',
+                self.data.trace_reference.shape[0],
+            )
+        )
+        return np.asarray(self.data.trace_reference[
+            :sample_count,
+            0,
+            int(trace_index),
+        ])
 
     def initialize_line_plot(self):
         # Set up the line plot
@@ -4689,7 +4805,7 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
                     self.trace_y_index
                 ][self.trace_x_index]
             )
-        self.trace_selected = self.data.trace_reference[::, 0, trace_index]
+        self.trace_selected = self._read_selected_trace(trace_index)
         self.times = self.data.get_trace_axis(len(self.trace_selected))
         self.line_ax.clear()
 
@@ -5109,7 +5225,14 @@ class TracesFitter:
         """
         # Get the selected trace
         self.trace_index = self.get_one_index(self.trace_x_index_var.get(), self.trace_y_index_var.get())
-        self.trace_selected = self.data.trace_reference[::, 0, self.trace_index]
+        if hasattr(self.data, 'get_trace_values'):
+            self.trace_selected = self.data.get_trace_values(self.trace_index)
+        else:
+            self.trace_selected = self.data.trace_reference[
+                ::,
+                0,
+                self.trace_index,
+            ]
         self.times = self.data.get_trace_axis(len(self.trace_selected))
 
         self.ax.clear() # Clear previous plot
@@ -5214,7 +5337,8 @@ class TracesFitter:
         except Exception as error:
             messagebox.showerror(
                 'Fit Error',
-                'Trace data must have shape (trace_length, 1, trace_count). '
+                'Trace data must have shape (trace_length, 1, trace_count) '
+                'inside the selected amplitude group. '
                 f'Got {getattr(trace_ref, "shape", None)}.\n{error}',
                 parent=self.root,
             )
@@ -5264,7 +5388,16 @@ class TracesFitter:
                         return
 
                     try:
-                        y_data = np.asarray(trace_ref[:, 0, i], dtype=float)
+                        if hasattr(self.data, 'get_trace_values'):
+                            y_data = np.asarray(
+                                self.data.get_trace_values(i),
+                                dtype=float,
+                            )
+                        else:
+                            y_data = np.asarray(
+                                trace_ref[:, 0, i],
+                                dtype=float,
+                            )
                     except Exception:
                         y_data = np.asarray(trace_ref[i], dtype=float).reshape(-1)
 

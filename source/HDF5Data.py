@@ -18,6 +18,17 @@ class HDF5MapPreview:
     is_linecut: bool = False
 
 
+@dataclass(frozen=True)
+class HDF5TraceChannel:
+    """One selectable trace-amplitude dataset inside an HDF5 measurement."""
+
+    identifier: str
+    label: str
+    dataset_path: str
+    sample_count: int
+    trace_count: int
+
+
 def _decode_hdf5_text(value):
     """Decode the first textual field used by Labber metadata records."""
     if isinstance(value, np.void) and value.dtype.names:
@@ -42,7 +53,7 @@ def _read_hdf5_names(dataset):
 
 
 def _trace_data_candidates(group):
-    """Return datasets that use the supported trace_length × 1 × count layout."""
+    """Return trace datasets using the samples × 1 × traces layout."""
     return [
         dataset
         for dataset in group.values()
@@ -56,30 +67,61 @@ def _trace_data_candidates(group):
     ]
 
 
-def find_trace_group(hdf5_file):
-    """Find a compatible trace group without relying on one exact group name."""
-    preferred_groups = []
+def find_trace_groups(hdf5_file, expected_trace_count=None):
+    """Find groups containing trace amplitudes, including below /Traces."""
+    trace_containers = []
     for name, item in hdf5_file.items():
         if (
             isinstance(item, h5py.Group)
             and name.casefold() in {'trace', 'traces'}
         ):
-            preferred_groups.append(item)
-    for group in preferred_groups:
-        if _trace_data_candidates(group):
-            return group
+            trace_containers.append(item)
 
+    def compatible(group):
+        candidates = _trace_data_candidates(group)
+        if expected_trace_count is not None:
+            candidates = [
+                dataset
+                for dataset in candidates
+                if dataset.shape[2] == int(expected_trace_count)
+            ]
+        return bool(candidates)
+
+    def compatible_groups_below(container):
+        groups = [container] if compatible(container) else []
+
+        def visitor(_name, item):
+            if isinstance(item, h5py.Group) and compatible(item):
+                groups.append(item)
+
+        container.visititems(visitor)
+        return groups
+
+    grouped_channels = []
+    for container in trace_containers:
+        grouped_channels.extend(compatible_groups_below(container))
+    if grouped_channels:
+        return grouped_channels
+
+    # Older/generated files may use an arbitrarily named trace group rather
+    # than a /Traces container. Preserve that single-group compatibility.
     discovered_groups = []
 
-    def visitor(_name, item):
-        if (
-            isinstance(item, h5py.Group)
-            and _trace_data_candidates(item)
-        ):
+    def fallback_visitor(_name, item):
+        if isinstance(item, h5py.Group) and compatible(item):
             discovered_groups.append(item)
 
-    hdf5_file.visititems(visitor)
-    return discovered_groups[0] if discovered_groups else None
+    hdf5_file.visititems(fallback_visitor)
+    return discovered_groups
+
+
+def find_trace_group(hdf5_file, expected_trace_count=None):
+    """Return the first compatible trace group in a measurement."""
+    groups = find_trace_groups(
+        hdf5_file,
+        expected_trace_count=expected_trace_count,
+    )
+    return groups[0] if groups else None
 
 
 def find_trace_data_dataset(trace_group, expected_trace_count=None):
@@ -87,7 +129,8 @@ def find_trace_data_dataset(trace_group, expected_trace_count=None):
     candidates = _trace_data_candidates(trace_group)
     if not candidates:
         raise ValueError(
-            'No trace dataset with shape (trace_length, 1, trace_count) was found.'
+            'No trace dataset with shape (trace_length, 1, trace_count) '
+            'was found in the selected trace group.'
         )
     if expected_trace_count is not None:
         matching_candidates = [
@@ -97,7 +140,133 @@ def find_trace_data_dataset(trace_group, expected_trace_count=None):
         ]
         if matching_candidates:
             candidates = matching_candidates
-    return max(candidates, key=lambda dataset: int(np.prod(dataset.shape)))
+    return max(
+        candidates,
+        key=lambda dataset: (
+            dataset.name.rsplit('/', 1)[-1].casefold() == 'data',
+            int(np.prod(dataset.shape)),
+        ),
+    )
+
+
+def _numeric_values(dataset):
+    """Return a numeric dataset as an array, or None for text/object data."""
+    if dataset.dtype.kind not in 'biufc':
+        return None
+    return np.asarray(dataset[()])
+
+
+def _trace_name_match_score(dataset_name, channel_name):
+    """Score how likely a metadata dataset belongs to an amplitude channel."""
+    dataset_name = dataset_name.rsplit('/', 1)[-1].casefold()
+    channel_name = str(channel_name).rsplit('/', 1)[-1].casefold()
+    score = 0
+    if channel_name and dataset_name.startswith(channel_name):
+        score += 1000
+    channel_prefix = channel_name
+    for suffix in ('_data', ' - data', ' data'):
+        if channel_prefix.endswith(suffix):
+            channel_prefix = channel_prefix[:-len(suffix)]
+            break
+    if channel_prefix and dataset_name.startswith(channel_prefix):
+        score += 500
+    score += len(os.path.commonprefix([dataset_name, channel_name]))
+    return score
+
+
+def _trace_channel_label(trace_group, trace_data_dataset, channel_count):
+    """Return the amplitude name represented by one trace dataset."""
+    for owner in (trace_group, trace_data_dataset):
+        for attribute_name in (
+            'label',
+            'channel_name',
+            'name',
+            'long_name',
+        ):
+            if attribute_name in owner.attrs:
+                label = _decode_hdf5_text(owner.attrs[attribute_name]).strip()
+                if label:
+                    return label
+
+    dataset_name = trace_data_dataset.name.rsplit('/', 1)[-1].strip()
+    if channel_count > 1:
+        return dataset_name
+
+    group_name = trace_group.name.rsplit('/', 1)[-1].strip()
+    if group_name.casefold() not in {'trace', 'traces'}:
+        return group_name
+
+    # Flat legacy files have no amplitude subgroup. In those files the
+    # instrument/channel name is commonly encoded by the *_t0dt dataset.
+    for dataset in trace_group.values():
+        if (
+            isinstance(dataset, h5py.Dataset)
+            and dataset.name.casefold().endswith('_t0dt')
+        ):
+            basename = dataset.name.rsplit('/', 1)[-1]
+            return basename[:-len('_t0dt')]
+
+    dataset_label = _trace_axis_label(trace_data_dataset, 'Trace amplitude')
+    return (
+        'Trace amplitude'
+        if dataset_label.casefold() == 'data'
+        else dataset_label
+    )
+
+
+def _trace_sample_count(trace_group, trace_data_dataset):
+    """Read the valid sample count from metadata local to one trace group."""
+    maximum_count = int(trace_data_dataset.shape[0])
+    basename = trace_data_dataset.name.rsplit('/', 1)[-1]
+    candidates = [
+        dataset
+        for dataset in trace_group.values()
+        if (
+            isinstance(dataset, h5py.Dataset)
+            and dataset.dtype.kind in 'biuf'
+            and dataset.name.rsplit('/', 1)[-1].casefold().endswith('_n')
+            and dataset.size >= 1
+        )
+    ]
+    candidates.sort(
+        key=lambda dataset: _trace_name_match_score(dataset.name, basename),
+        reverse=True,
+    )
+    if candidates:
+        counts = np.asarray(candidates[0][()]).reshape(-1)
+        try:
+            count = int(counts[0])
+        except (TypeError, ValueError, OverflowError):
+            count = maximum_count
+        if 0 < count <= maximum_count:
+            return count
+    return maximum_count
+
+
+def list_trace_channels(trace_group, expected_trace_count=None):
+    """Describe every trace-amplitude dataset local to one trace group."""
+    datasets = _trace_data_candidates(trace_group)
+    if expected_trace_count is not None:
+        datasets = [
+            dataset
+            for dataset in datasets
+            if dataset.shape[2] == int(expected_trace_count)
+        ]
+    channel_count = len(datasets)
+    return [
+        HDF5TraceChannel(
+            identifier=dataset.name,
+            label=_trace_channel_label(
+                trace_group,
+                dataset,
+                channel_count,
+            ),
+            dataset_path=dataset.name,
+            sample_count=_trace_sample_count(trace_group, dataset),
+            trace_count=int(dataset.shape[2]),
+        )
+        for dataset in datasets
+    ]
 
 
 def _trace_axis_label(dataset, fallback):
@@ -111,50 +280,101 @@ def _trace_axis_label(dataset, fallback):
     return dataset_name or fallback
 
 
-def read_trace_axis(trace_group, trace_data_dataset):
+def _trace_data_axis_label(trace_data_dataset, fallback):
+    """Read Labber's X-axis name/unit attributes from a trace dataset."""
+    axis_name = ''
+    axis_unit = ''
+    for attribute_name in ('x, name', 'x_name', 'x name', 'x-axis name'):
+        if attribute_name in trace_data_dataset.attrs:
+            axis_name = _decode_hdf5_text(
+                trace_data_dataset.attrs[attribute_name]
+            ).strip()
+            if axis_name:
+                break
+    for attribute_name in ('x, unit', 'x_unit', 'x unit', 'x-axis unit'):
+        if attribute_name in trace_data_dataset.attrs:
+            axis_unit = _decode_hdf5_text(
+                trace_data_dataset.attrs[attribute_name]
+            ).strip()
+            if axis_unit:
+                break
+    if axis_name and axis_unit:
+        return f'{axis_name} ({axis_unit})'
+    return axis_name or fallback
+
+
+def read_trace_axis(
+    trace_group,
+    trace_data_dataset,
+    sample_count=None,
+    channel_name='',
+):
     """Read an arbitrary explicit trace axis or reconstruct a legacy one."""
-    trace_length = int(trace_data_dataset.shape[0])
+    trace_length = int(sample_count or trace_data_dataset.shape[0])
     explicit_axis_candidates = []
     legacy_axis_candidates = []
     for dataset in trace_group.values():
         if not isinstance(dataset, h5py.Dataset) or dataset == trace_data_dataset:
             continue
         dataset_name = dataset.name.casefold()
-        if (
-            dataset.size == trace_length
-            and dataset.ndim <= 2
-            and 't0dt' not in dataset_name
-            and not dataset_name.endswith('_n')
+        values = _numeric_values(dataset)
+        if values is None:
+            continue
+        if 't0dt' not in dataset_name and not dataset_name.endswith('_n'):
+            axis_values = None
+            if dataset.ndim == 1 and dataset.size == trace_length:
+                axis_values = values
+            elif dataset.ndim == 2:
+                if dataset.size == trace_length and 1 in dataset.shape:
+                    axis_values = values.reshape(-1)
+            if axis_values is not None:
+                explicit_axis_candidates.append((dataset, axis_values))
+        if 't0dt' in dataset_name or (
+            dataset.size == 2 and not dataset_name.endswith('_n')
         ):
-            explicit_axis_candidates.append(dataset)
-        elif dataset.size == 2:
-            legacy_axis_candidates.append(dataset)
+            metadata_values = None
+            if dataset.size == 2:
+                metadata_values = values.reshape(-1)[:2]
+            if metadata_values is not None:
+                legacy_axis_candidates.append((dataset, metadata_values))
+
+    def select_channel_metadata(candidates):
+        scores = [
+            max(
+                _trace_name_match_score(candidate[0].name, channel_name),
+                _trace_name_match_score(
+                    candidate[0].name,
+                    trace_data_dataset.name,
+                ),
+            )
+            for candidate in candidates
+        ]
+        return candidates[int(np.argmax(scores))]
 
     if explicit_axis_candidates:
-        axis_dataset = explicit_axis_candidates[0]
-        axis_values = np.asarray(axis_dataset[()]).reshape(-1)
+        axis_dataset, axis_values = select_channel_metadata(
+            explicit_axis_candidates
+        )
         return (
-            axis_values.astype(np.float64, copy=False),
+            np.asarray(axis_values).reshape(-1).astype(np.float64, copy=False),
             _trace_axis_label(axis_dataset, 'Trace X'),
         )
 
     if legacy_axis_candidates:
-        metadata_dataset = next(
-            (
-                dataset
-                for dataset in legacy_axis_candidates
-                if 't0dt' in dataset.name.casefold()
-            ),
-            legacy_axis_candidates[0],
+        metadata_dataset, metadata_values = select_channel_metadata(
+            legacy_axis_candidates
         )
-        start, spacing = np.asarray(metadata_dataset[()]).reshape(-1)[:2]
+        start, spacing = np.asarray(metadata_values).reshape(-1)[:2]
         axis_values = float(start) + float(spacing) * np.arange(trace_length)
         label = _trace_axis_label(metadata_dataset, 'Trace X')
         if 't0dt' in label.casefold():
-            label = 'Trace X'
+            label = _trace_data_axis_label(trace_data_dataset, 'Trace X')
         return axis_values, label
 
-    return np.arange(trace_length, dtype=np.float64), 'Trace sample'
+    return (
+        np.arange(trace_length, dtype=np.float64),
+        _trace_data_axis_label(trace_data_dataset, 'Trace sample'),
+    )
 
 
 def inspect_viewer_hdf5(path):
@@ -221,7 +441,10 @@ def inspect_viewer_hdf5(path):
                 'log_names': logged_channels,
                 'step_dimensions': step_dimensions,
                 'data_shape': tuple(data_dataset.shape),
-                'has_traces': find_trace_group(hdf5_file) is not None,
+                'has_traces': find_trace_group(
+                    hdf5_file,
+                    expected_trace_count=expected_points,
+                ) is not None,
             }
     except OSError as error:
         raise ValueError(f'Could not read the HDF5 file: {error}') from error
@@ -459,6 +682,12 @@ class HDF5Data:
         trace_axis_name (str):
             Display label for the trace X-axis.
 
+        trace_channel_name (str):
+            Display label for the selected trace-amplitude channel.
+
+        trace_sample_count (int):
+            Number of valid samples for the selected amplitude channel.
+
         trace_order (numpy.array):
         Order of traces
 
@@ -559,7 +788,9 @@ class HDF5Data:
                  measure_axis=None, name_axis=None, measure_data=None, name_data=None, measure_dim=None,
                  shape_data=None, current_h5dir=None, savepath=None, traces=None, shape_trace=None, trace_time=None,
                  trace_order=None, traces_dt=None, trace_reference=None, hist=None, bins=None,
-                 trace_axis_name=None, trace_group_path=None):
+                 trace_axis_name=None, trace_group_path=None,
+                 trace_dataset_path=None, trace_channel_name=None,
+                 trace_sample_count=None):
 
         self.readpath = readpath
         self.shape_data = shape_data
@@ -581,6 +812,9 @@ class HDF5Data:
         self.traces_time = trace_time
         self.trace_axis_name = trace_axis_name
         self.trace_group_path = trace_group_path
+        self.trace_dataset_path = trace_dataset_path
+        self.trace_channel_name = trace_channel_name
+        self.trace_sample_count = trace_sample_count
         self.traces_dt = traces_dt
         self.trace_order = trace_order
         self.trace_reference = trace_reference
@@ -591,7 +825,18 @@ class HDF5Data:
 
     def set_path(self, path_read_inout, intention='r'):
         if intention == 'r':
+            path_changed = self.readpath != path_read_inout
             self.readpath = path_read_inout
+            if path_changed:
+                self.trace_dataset_path = None
+                self.trace_group_path = None
+                self.trace_channel_name = None
+                self.trace_sample_count = None
+                self.trace_reference = None
+                self.traces = None
+                self.traces_time = None
+                self.trace_axis_name = None
+                self.traces_dt = None
         elif intention == 'w':
             self.savepath = path_read_inout
 
@@ -605,29 +850,194 @@ class HDF5Data:
         """Return the compatible trace group in the currently open file."""
         if self.file is None:
             self.set_data()
-        trace_group = find_trace_group(self.file)
+        if self.trace_dataset_path and self.trace_dataset_path in self.file:
+            trace_group = self.file[self.trace_dataset_path].parent
+        else:
+            trace_group = find_trace_group(
+                self.file,
+                expected_trace_count=self._expected_trace_count(),
+            )
         if trace_group is None:
             raise ValueError('The HDF5 file does not contain compatible traces.')
         self.trace_group_path = trace_group.name
         return trace_group
 
+    def _expected_trace_count(self):
+        """Return the number of scan points when the measurement declares it."""
+        if self.measure_dim is not None:
+            return int(np.prod(self.measure_dim))
+        if self.file is not None and 'Data' in self.file:
+            dimensions = self.file['Data'].attrs.get('Step dimensions')
+            if dimensions is not None:
+                return int(np.prod(np.asarray(dimensions, dtype=int)))
+        return None
+
+    def get_trace_channels(self):
+        """Return every selectable trace-amplitude channel in the file."""
+        if self.file is None:
+            self.set_data()
+        expected_trace_count = self._expected_trace_count()
+        channels = []
+        for trace_group in find_trace_groups(
+            self.file,
+            expected_trace_count=expected_trace_count,
+        ):
+            channels.extend(list_trace_channels(
+                trace_group,
+                expected_trace_count=expected_trace_count,
+            ))
+
+        label_counts = {}
+        for channel in channels:
+            label_counts[channel.label] = label_counts.get(channel.label, 0) + 1
+        if any(count > 1 for count in label_counts.values()):
+            channels = [
+                HDF5TraceChannel(
+                    identifier=channel.identifier,
+                    label=(
+                        f'{channel.label} '
+                        f'[{self.file[channel.dataset_path].parent.name}]'
+                        if label_counts[channel.label] > 1
+                        else channel.label
+                    ),
+                    dataset_path=channel.dataset_path,
+                    sample_count=channel.sample_count,
+                    trace_count=channel.trace_count,
+                )
+                for channel in channels
+            ]
+        return channels
+
+    def get_selected_trace_channel(self):
+        """Return the selected amplitude channel, choosing the first by default."""
+        if (
+            self.file is not None
+            and self.trace_dataset_path
+            and self.trace_dataset_path in self.file
+            and self.trace_channel_name
+            and self.trace_sample_count is not None
+        ):
+            dataset = self.file[self.trace_dataset_path]
+            if (
+                isinstance(dataset, h5py.Dataset)
+                and dataset.ndim == 3
+                and dataset.shape[1] == 1
+            ):
+                return HDF5TraceChannel(
+                    identifier=dataset.name,
+                    label=self.trace_channel_name,
+                    dataset_path=self.trace_dataset_path,
+                    sample_count=int(self.trace_sample_count),
+                    trace_count=int(dataset.shape[2]),
+                )
+        channels = self.get_trace_channels()
+        if not channels:
+            raise ValueError('The HDF5 file does not contain compatible traces.')
+        selected = next(
+            (
+                channel
+                for channel in channels
+                if (
+                    channel.dataset_path == self.trace_dataset_path
+                )
+            ),
+            channels[0],
+        )
+        self.trace_dataset_path = selected.dataset_path
+        self.trace_group_path = self.file[selected.dataset_path].parent.name
+        self.trace_channel_name = selected.label
+        self.trace_sample_count = selected.sample_count
+        return selected
+
+    def select_trace_channel(self, channel_identifier):
+        """Select one trace amplitude by identifier, label, or channel object."""
+        if isinstance(channel_identifier, HDF5TraceChannel):
+            requested_identifier = channel_identifier.identifier
+        else:
+            requested_identifier = str(channel_identifier)
+        selected = next(
+            (
+                channel
+                for channel in self.get_trace_channels()
+                if requested_identifier in {
+                    channel.identifier,
+                    channel.label,
+                }
+            ),
+            None,
+        )
+        if selected is None:
+            raise ValueError(
+                f'Unknown trace amplitude channel: {requested_identifier!r}.'
+            )
+        self.trace_dataset_path = selected.dataset_path
+        self.trace_group_path = self.file[selected.dataset_path].parent.name
+        self.trace_channel_name = selected.label
+        self.trace_sample_count = selected.sample_count
+        self.trace_reference = self.file[selected.dataset_path]
+        self.traces = None
+        self.traces_time = None
+        self.trace_axis_name = None
+        self.traces_dt = None
+        self.saved_traces = False
+        self.hist = None
+        self.bins = None
+        return selected
+
     def has_traces(self):
         """Return whether the current file contains a compatible trace group."""
         try:
-            self.get_trace_group()
+            return bool(self.get_trace_channels())
         except (OSError, ValueError):
             return False
-        return True
 
     def get_trace_data_dataset(self):
-        """Return the trace-value dataset independent of its stored name."""
-        expected_trace_count = None
-        if self.measure_dim is not None:
-            expected_trace_count = int(np.prod(self.measure_dim))
-        return find_trace_data_dataset(
-            self.get_trace_group(),
-            expected_trace_count=expected_trace_count,
+        """Return the dataset containing the selected amplitude channel."""
+        if (
+            self.file is not None
+            and self.trace_dataset_path
+            and self.trace_dataset_path in self.file
+        ):
+            return self.file[self.trace_dataset_path]
+        channel = self.get_selected_trace_channel()
+        return self.file[channel.dataset_path]
+
+    def get_trace_sample_count(self):
+        """Return the valid sample count of the selected amplitude channel."""
+        if self.trace_sample_count is not None:
+            return int(self.trace_sample_count)
+        return int(self.get_selected_trace_channel().sample_count)
+
+    def get_trace_values(self, trace_index):
+        """Read one selected amplitude trace without loading other channels."""
+        dataset = self.get_trace_data_dataset()
+        return np.asarray(dataset[
+            :self.get_trace_sample_count(),
+            0,
+            int(trace_index),
+        ])
+
+    def get_trace_matrix(self, trace_indices):
+        """Read selected traces from the active amplitude channel."""
+        trace_indices = np.asarray(trace_indices, dtype=int).ravel()
+        if trace_indices.size == 0:
+            raise ValueError('At least one trace must be selected.')
+        dataset = self.get_trace_data_dataset()
+        trace_count = int(dataset.shape[2])
+        if np.any(trace_indices < 0) or np.any(trace_indices >= trace_count):
+            raise IndexError('A selected trace index is outside the trace dataset.')
+        unique_indices, inverse_indices = np.unique(
+            trace_indices,
+            return_inverse=True,
         )
+        selected_traces = np.asarray(dataset[
+            :self.get_trace_sample_count(),
+            0,
+            unique_indices,
+        ])
+        if selected_traces.ndim == 1:
+            selected_traces = selected_traces[:, np.newaxis]
+        return selected_traces[:, inverse_indices].T
 
     def get_trace_axis(self, trace_length=None):
         """Return the stored or reconstructed trace X coordinate."""
@@ -749,7 +1159,12 @@ class HDF5Data:
     def set_trace_shape(self):
         try:
             self.set_data()
-            self.shape_trace = tuple(self.get_trace_data_dataset().shape)
+            trace_dataset = self.get_trace_data_dataset()
+            self.shape_trace = (
+                self.get_trace_sample_count(),
+                1,
+                int(trace_dataset.shape[2]),
+            )
         except Exception as e:
             print(f"Error getting shape of data: {e}")
 
@@ -906,7 +1321,7 @@ class HDF5Data:
             if self.measure_dim is None:
                 self.set_measure_dim()
             trace_dataset = self.get_trace_data_dataset()
-            trace_length = int(trace_dataset.shape[0])
+            trace_length = self.get_trace_sample_count()
             trace_count = int(trace_dataset.shape[2])
             expected_trace_count = int(np.prod(self.measure_dim))
             if trace_count != expected_trace_count:
@@ -915,9 +1330,13 @@ class HDF5Data:
                     f'{expected_trace_count} scan points.'
                 )
             traces_i = np.asarray(
-                trace_dataset,
+                trace_dataset[
+                    :trace_length,
+                    0,
+                    :,
+                ],
                 dtype=np.float32,
-            ).swapaxes(0, 2).reshape(trace_count, trace_length)
+            ).T.reshape(trace_count, trace_length)
             self.traces = traces_i.reshape(
                 int(np.prod(self.measure_dim[1:])),
                 int(self.measure_dim[0]),
@@ -935,6 +1354,8 @@ class HDF5Data:
         axis_values, axis_name = read_trace_axis(
             trace_group,
             trace_dataset,
+            sample_count=self.get_trace_sample_count(),
+            channel_name=self.trace_channel_name or '',
         )
         self.traces_time = axis_values
         self.trace_axis_name = axis_name
@@ -960,10 +1381,17 @@ class HDF5Data:
             trace_order_matrix = []
             should_array_shape = (int(self.measure_dim[0]), int(np.prod(np.array(self.measure_dim)[1:])))
             trace_dataset = self.get_trace_data_dataset()
+            trace_length = self.get_trace_sample_count()
             traces_i = (
-                np.asarray(trace_dataset, dtype=np.float32)
-                .swapaxes(0, 2)
-                .reshape(int(np.prod(should_array_shape)), trace_dataset.shape[0])
+                np.asarray(
+                    trace_dataset[
+                        :trace_length,
+                        0,
+                        :,
+                    ],
+                    dtype=np.float32,
+                )
+                .T.reshape(int(np.prod(should_array_shape)), trace_length)
             )
             save_path = self.wdir + '/traces'
             if not os.path.exists(save_path):
@@ -976,11 +1404,15 @@ class HDF5Data:
             traces_i = None
             self.saved_traces = True
 
-    def trace_loading_with_referance(self):
+    def trace_loading_with_referance(self, trace_channel=None):
         if self.file is None:
             self.set_data()
         if self.measure_dim is None:
             self.set_measure_dim()
+        if trace_channel is not None:
+            self.select_trace_channel(trace_channel)
+        else:
+            self.get_selected_trace_channel()
         should_array_shape = (int(self.measure_dim[0]), int(np.prod(np.array(self.measure_dim)[1:])))
         self.trace_reference = self.get_trace_data_dataset()
         trace_count = int(self.trace_reference.shape[-1])
@@ -1099,6 +1531,9 @@ class HDF5Data:
         self.traces_time = None
         self.trace_axis_name = None
         self.trace_group_path = None
+        self.trace_dataset_path = None
+        self.trace_channel_name = None
+        self.trace_sample_count = None
         self.trace_order = None
         self.saved_traces = False
         self.trace_reference = None

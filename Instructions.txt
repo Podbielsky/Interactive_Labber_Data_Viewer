@@ -242,13 +242,23 @@ Re-arranging multidimensional scan axes
   from the discovered three-dimensional trace dataset; it is restored when
   scan axes are selected again.
 - Trace-axis maps require the standard Labber trace layout
-  (trace_length, 1, trace_count) and one trace for every scan point. The trace
-  dataset and containing group can have arbitrary names. An explicit one-
+  (trace_length, 1, trace_count) and one trace for every scan point. For
+  measurements with multiple amplitudes, every compatible amplitude dataset
+  inside Traces is treated as a separate channel. For example, Trace_I is paired
+  with Trace_I_N and Trace_I_t0dt, while Trace_V is paired with Trace_V_N and
+  Trace_V_t0dt. The amplitude dataset name becomes the channel name in the Trace
+  amplitude selector shown to the right of the map. Layouts that place each
+  amplitude dataset and its metadata in a separate child group below Traces are
+  supported as well; there the child-group name is used. The selector changes
+  the line trace, trace-axis map, Fourier tools, tunnelling-rate calculation,
+  export, and trace fitter together. Older files with a single trace dataset
+  directly inside Traces, and compatible files with an arbitrarily named single
+  trace group, remain supported. An explicit one-
   dimensional axis dataset with trace_length values is used when available;
   its dataset name or label attribute becomes the displayed axis label. Legacy
-  two-value start/spacing metadata and a sample-index fallback are also
-  supported. Only traces belonging to the selected Y line and fixed additional-
-  axis values are read, rather than loading all traces in the file.
+  start/spacing metadata and a sample-index fallback are also supported. Only
+  traces from the selected amplitude dataset and selected scan coordinates are
+  read, rather than loading every amplitude in the file.
 - Select Apply to reload the chosen two-dimensional plane from the original
   measurement arrays. Existing ROI corners, drawn lines, crosshair positions,
   and undo snapshots are cleared because their coordinates belong to the
