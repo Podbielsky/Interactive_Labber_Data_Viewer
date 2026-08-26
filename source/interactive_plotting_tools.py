@@ -59,6 +59,9 @@ plt.register_cmap(name='NeonPiCy', cmap=neon_cmap)
 rc('pdf', fonttype=42)
 
 
+TRACE_SAMPLE_AXIS_ROLE = 'trace_samples'
+
+
 def format_hdf5_label(label):
     """Return a readable label for byte or string HDF5 metadata."""
     if isinstance(label, (bytes, np.bytes_)):
@@ -165,6 +168,118 @@ def slice_scan_grid_for_axes(
     y_position = remaining_axes.index(y_axis_index)
     x_position = remaining_axes.index(x_axis_index)
     return np.transpose(sliced_grid, axes=(y_position, x_position))
+
+
+def slice_scan_vector_for_axis(
+    grid,
+    varying_axis_index,
+    fixed_axis_indices,
+):
+    """Slice an N-D scan grid while retaining one selected dimension."""
+    grid_array = np.asarray(grid)
+    axis_count = grid_array.ndim
+    varying_axis_index = int(varying_axis_index)
+    if not 0 <= varying_axis_index < axis_count:
+        raise ValueError('The varying scan-axis index is out of range.')
+
+    fixed_axis_indices = dict(fixed_axis_indices)
+    expected_fixed_axes = set(range(axis_count)) - {varying_axis_index}
+    if set(fixed_axis_indices) != expected_fixed_axes:
+        raise ValueError(
+            'Every scan axis other than the varying axis must have one '
+            'selected index.'
+        )
+
+    selection = [slice(None)] * axis_count
+    for axis_index, selected_index in fixed_axis_indices.items():
+        selected_index = int(selected_index)
+        if not 0 <= selected_index < grid_array.shape[axis_index]:
+            raise IndexError(
+                f'Selected index {selected_index} is outside scan axis '
+                f'{axis_index} with size {grid_array.shape[axis_index]}.'
+            )
+        selection[axis_index] = selected_index
+    return np.asarray(grid_array[tuple(selection)])
+
+
+def reshape_trace_order_to_scan_grid(trace_order, measure_dim):
+    """Convert Labber's flattened trace order into logical scan-axis order."""
+    dimensions = tuple(int(dimension) for dimension in measure_dim)
+    if not dimensions or any(dimension <= 0 for dimension in dimensions):
+        raise ValueError('Trace scan dimensions must be positive.')
+    trace_order_array = np.asarray(trace_order)
+    if trace_order_array.size != int(np.prod(dimensions)):
+        raise ValueError(
+            'The trace count does not match the product of the scan dimensions.'
+        )
+
+    flattened_scan_shape = (
+        dimensions[0],
+        int(np.prod(dimensions[1:])),
+    )
+    if trace_order_array.shape == flattened_scan_shape:
+        trace_order_array = trace_order_array.swapaxes(0, 1)
+    return trace_order_array.reshape(tuple(reversed(dimensions)))
+
+
+def load_selected_trace_matrix(trace_reference, trace_indices):
+    """Read selected Labber traces and return one trace per matrix row."""
+    trace_indices = np.asarray(trace_indices, dtype=int).ravel()
+    if trace_indices.size == 0:
+        raise ValueError('At least one trace must be selected for the map.')
+    trace_count = int(trace_reference.shape[2])
+    if np.any(trace_indices < 0) or np.any(trace_indices >= trace_count):
+        raise IndexError('A selected trace index is outside the trace dataset.')
+
+    # h5py requires increasing indices for fancy dataset selection. Reading
+    # sorted unique traces also avoids loading unrelated traces from large files.
+    unique_indices, inverse_indices = np.unique(
+        trace_indices,
+        return_inverse=True,
+    )
+    selected_traces = np.asarray(
+        trace_reference[:, 0, unique_indices]
+    )
+    if selected_traces.ndim == 1:
+        selected_traces = selected_traces[:, np.newaxis]
+    return selected_traces[:, inverse_indices].T
+
+
+def build_trace_axis_map(
+    trace_reference,
+    trace_order_grid,
+    trace_x_values,
+    y_coordinate_grid,
+    y_axis_index,
+    fixed_axis_indices,
+):
+    """Build a [scan Y, trace X] map whose values are trace amplitudes."""
+    trace_indices = slice_scan_vector_for_axis(
+        trace_order_grid,
+        y_axis_index,
+        fixed_axis_indices,
+    )
+    y_values = slice_scan_vector_for_axis(
+        y_coordinate_grid,
+        y_axis_index,
+        fixed_axis_indices,
+    )
+    trace_matrix = load_selected_trace_matrix(
+        trace_reference,
+        trace_indices,
+    )
+    trace_x_values = np.asarray(trace_x_values)
+    if trace_x_values.ndim != 1:
+        trace_x_values = np.ravel(trace_x_values)
+    if trace_matrix.shape[1] != trace_x_values.size:
+        raise ValueError(
+            'The trace X axis length does not match the stored trace length.'
+        )
+
+    map_shape = trace_matrix.shape
+    x_grid = np.broadcast_to(trace_x_values, map_shape)
+    y_grid = np.broadcast_to(np.asarray(y_values)[:, np.newaxis], map_shape)
+    return x_grid, y_grid, trace_matrix
 
 
 def _row_direction(values):
@@ -407,6 +522,8 @@ class InteractiveArrayPlotter:
     if the dataset contains trace information.
 
     """
+    supports_trace_axis_map = False
+
     def __init__(
         self,
         root,
@@ -425,6 +542,8 @@ class InteractiveArrayPlotter:
         self.data = hdf5data
         #### Created by Nico Reinders  for trace loading validation
         self.contains_traces = 'Traces' in list(hdf5data.file.keys())
+        self.trace_axis_map_mode = False
+        self._data_selection_before_trace_axis_map = None
         ####
         self.name_data_z = ''
         self.name_data_y_axis = ''
@@ -524,7 +643,9 @@ class InteractiveArrayPlotter:
             label='Re-arrange Scan Axes…',
             command=self.open_rearrange_scan_axes_window,
             state=(
-                tk.NORMAL if self.scan_axis_count > 2 else tk.DISABLED
+                tk.NORMAL
+                if self._scan_axis_rearrangement_available()
+                else tk.DISABLED
             ),
         )
         self.rearrange_scan_axes_menu_index = self.data_menu.index('end')
@@ -931,6 +1052,68 @@ class InteractiveArrayPlotter:
 
         raise ValueError(f'No data array is available for {selected_name!r}.')
 
+    def _trace_order_scan_grid(self):
+        """Return trace indices arranged like the logical scan dimensions."""
+        return reshape_trace_order_to_scan_grid(
+            self.data.trace_order,
+            self.data.measure_dim,
+        )
+
+    def _trace_axis_map_arrays(self):
+        """Return trace time, selected scan coordinate, and trace amplitudes."""
+        if not self.supports_trace_axis_map:
+            raise ValueError(
+                'Trace-axis maps are available only in the trace plotter.'
+            )
+        trace_reference = getattr(self.data, 'trace_reference', None)
+        if trace_reference is None:
+            raise ValueError('The measurement does not expose trace data.')
+        trace_length = int(trace_reference.shape[0])
+        trace_x_values = np.asarray(
+            self.data.traces_dt * np.arange(trace_length),
+            dtype=np.float64,
+        )
+        return build_trace_axis_map(
+            trace_reference,
+            self._trace_order_scan_grid(),
+            trace_x_values,
+            self._scan_coordinate_grid(self.y_scan_axis_index),
+            self.y_scan_axis_index,
+            self._selected_additional_index_map(),
+        )
+
+    def _set_trace_axis_data_selector_state(self, enabled):
+        """Show that trace amplitudes replace the normal channel selection."""
+        if not hasattr(self, 'data_combobox'):
+            return
+        trace_value_label = getattr(
+            self,
+            'trace_ylabel',
+            'Trace amplitude',
+        )
+        if enabled:
+            if self._data_selection_before_trace_axis_map is None:
+                self._data_selection_before_trace_axis_map = (
+                    self.data_combobox.get()
+                )
+            display_values = list(self.name_data)
+            if trace_value_label not in display_values:
+                display_values.append(trace_value_label)
+            self.data_combobox.configure(
+                values=display_values,
+                state='disabled',
+            )
+            self.data_combobox.set(trace_value_label)
+            return
+
+        previous_selection = self._data_selection_before_trace_axis_map
+        self._data_selection_before_trace_axis_map = None
+        self.data_combobox.configure(values=self.name_data, state='readonly')
+        if previous_selection in self.name_data:
+            self.data_combobox.set(previous_selection)
+        elif self.name_data:
+            self.data_combobox.set(self.name_data[0])
+
     def _slice_current_scan_grid(self, grid):
         """Slice a full scan grid using the current axis roles and selectors."""
         return slice_scan_grid_for_axes(
@@ -943,6 +1126,16 @@ class InteractiveArrayPlotter:
     def _default_scan_axis_roles(self):
         return self.scan_axis_count - 1, self.scan_axis_count - 2
 
+    def _scan_axis_rearrangement_available(self):
+        """Return whether this plotter has at least one alternate map plane."""
+        return (
+            self.scan_axis_count > 2
+            or (
+                self.supports_trace_axis_map
+                and self.scan_axis_count >= 2
+            )
+        )
+
     def _update_x_sweep_control_state(self):
         """Allow serpentine correction only for the acquisition X/Y plane."""
         if not hasattr(self, 'alternating_x_sweep_radio'):
@@ -950,6 +1143,7 @@ class InteractiveArrayPlotter:
         default_x_axis, default_y_axis = self._default_scan_axis_roles()
         correction_available = (
             not self.single_axis_measurement
+            and not self.trace_axis_map_mode
             and self.x_scan_axis_index == default_x_axis
             and self.y_scan_axis_index == default_y_axis
         )
@@ -961,7 +1155,7 @@ class InteractiveArrayPlotter:
 
     def open_rearrange_scan_axes_window(self):
         """Choose the two displayed dimensions of a multidimensional scan."""
-        if self.scan_axis_count <= 2:
+        if not self._scan_axis_rearrangement_available():
             return None
         existing_window = getattr(self, 'rearrange_scan_axes_window', None)
         if existing_window is not None and existing_window.winfo_exists():
@@ -979,12 +1173,20 @@ class InteractiveArrayPlotter:
         content.pack(fill=tk.BOTH, expand=True)
         content.columnconfigure(1, weight=1)
 
+        rearrange_instructions = (
+            'Choose two different scan axes for the map. Every remaining '
+            'scan axis becomes a fixed-value selector beside the plot.'
+        )
+        if self.supports_trace_axis_map:
+            rearrange_instructions = (
+                'Choose the displayed map axes. Every remaining scan axis '
+                'becomes a fixed-value selector beside the plot. Select '
+                'Trace samples as X to use the stored trace amplitudes as '
+                'the map values.'
+            )
         ttk.Label(
             content,
-            text=(
-                'Choose two different scan axes for the map. Every remaining '
-                'axis becomes a fixed-value selector beside the plot.'
-            ),
+            text=rearrange_instructions,
             wraplength=520,
         ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 12))
 
@@ -992,9 +1194,20 @@ class InteractiveArrayPlotter:
             self._scan_axis_description(axis_index)
             for axis_index in range(self.scan_axis_count)
         ]
+        trace_axis_description = (
+            f'{getattr(self, "trace_xlabel", "Trace X axis")} '
+            '(trace samples)'
+        )
+        x_axis_descriptions = list(axis_descriptions)
+        if self.supports_trace_axis_map:
+            x_axis_descriptions.append(trace_axis_description)
         x_axis_variable = tk.StringVar(
             master=dialog,
-            value=axis_descriptions[self.x_scan_axis_index],
+            value=(
+                trace_axis_description
+                if self.trace_axis_map_mode
+                else axis_descriptions[self.x_scan_axis_index]
+            ),
         )
         y_axis_variable = tk.StringVar(
             master=dialog,
@@ -1008,7 +1221,7 @@ class InteractiveArrayPlotter:
         x_axis_combobox = ttk.Combobox(
             content,
             textvariable=x_axis_variable,
-            values=axis_descriptions,
+            values=x_axis_descriptions,
             state='readonly',
             width=34,
         )
@@ -1033,18 +1246,27 @@ class InteractiveArrayPlotter:
             wraplength=350,
         ).grid(row=3, column=1, sticky=tk.W, pady=6)
 
-        def selected_axis_indices():
+        def selected_axis_roles():
+            selected_x = x_axis_variable.get()
+            x_axis_role = (
+                TRACE_SAMPLE_AXIS_ROLE
+                if selected_x == trace_axis_description
+                else axis_descriptions.index(selected_x)
+            )
             return (
-                axis_descriptions.index(x_axis_variable.get()),
+                x_axis_role,
                 axis_descriptions.index(y_axis_variable.get()),
             )
 
         def update_additional_axes(_event=None):
-            x_axis_index, y_axis_index = selected_axis_indices()
+            x_axis_role, y_axis_index = selected_axis_roles()
+            displayed_scan_axes = {y_axis_index}
+            if x_axis_role != TRACE_SAMPLE_AXIS_ROLE:
+                displayed_scan_axes.add(x_axis_role)
             additional_axes_variable.set(', '.join(
                 axis_descriptions[axis_index]
                 for axis_index in range(self.scan_axis_count)
-                if axis_index not in (x_axis_index, y_axis_index)
+                if axis_index not in displayed_scan_axes
             ) or 'None')
 
         x_axis_combobox.bind('<<ComboboxSelected>>', update_additional_axes)
@@ -1052,15 +1274,15 @@ class InteractiveArrayPlotter:
         update_additional_axes()
 
         def apply_roles():
-            x_axis_index, y_axis_index = selected_axis_indices()
-            if x_axis_index == y_axis_index:
+            x_axis_role, y_axis_index = selected_axis_roles()
+            if x_axis_role == y_axis_index:
                 messagebox.showerror(
                     'Invalid Scan Axes',
                     'The displayed X and Y axes must be different.',
                     parent=dialog,
                 )
                 return
-            self.apply_scan_axis_roles(x_axis_index, y_axis_index)
+            self.apply_scan_axis_roles(x_axis_role, y_axis_index)
             dialog.destroy()
 
         def restore_default_roles():
@@ -1094,29 +1316,44 @@ class InteractiveArrayPlotter:
         return dialog
 
     def apply_scan_axis_roles(self, x_axis_index, y_axis_index):
-        """Assign scan dimensions to X/Y and rebuild the selected map plane."""
-        x_axis_index = int(x_axis_index)
+        """Assign scan or trace dimensions and rebuild the selected map."""
+        trace_axis_selected = x_axis_index == TRACE_SAMPLE_AXIS_ROLE
         y_axis_index = int(y_axis_index)
-        if self.scan_axis_count <= 2:
-            raise ValueError('Scan-axis rearrangement requires at least 3 axes.')
-        if x_axis_index == y_axis_index:
-            raise ValueError('The displayed X and Y axes must be different.')
-        if not (
-            0 <= x_axis_index < self.scan_axis_count
-            and 0 <= y_axis_index < self.scan_axis_count
-        ):
+        if not self._scan_axis_rearrangement_available():
+            raise ValueError(
+                'Scan-axis rearrangement is unavailable for this dataset.'
+            )
+        if not 0 <= y_axis_index < self.scan_axis_count:
             raise ValueError('A selected scan axis is out of range.')
+        if trace_axis_selected:
+            if not self.supports_trace_axis_map:
+                raise ValueError(
+                    'Trace samples can be selected only in the trace plotter.'
+                )
+        else:
+            x_axis_index = int(x_axis_index)
+            if x_axis_index == y_axis_index:
+                raise ValueError(
+                    'The displayed X and Y axes must be different.'
+                )
+            if not 0 <= x_axis_index < self.scan_axis_count:
+                raise ValueError('A selected scan axis is out of range.')
 
         preserved_indices = self._selected_additional_index_map()
-        self.x_scan_axis_index = x_axis_index
+        self.trace_axis_map_mode = trace_axis_selected
+        self.x_scan_axis_index = (
+            None if trace_axis_selected else x_axis_index
+        )
         self.y_scan_axis_index = y_axis_index
         self.additional_scan_axis_indices = [
             axis_index
             for axis_index in range(self.scan_axis_count)
-            if axis_index not in (x_axis_index, y_axis_index)
+            if axis_index != y_axis_index
+            and (trace_axis_selected or axis_index != x_axis_index)
         ]
         self.num_dimensions = len(self.additional_scan_axis_indices)
         self._rebuild_parameter_selectors(preserved_indices)
+        self._set_trace_axis_data_selector_state(trace_axis_selected)
         self._update_x_sweep_control_state()
 
         self.x_index = 0
@@ -1157,6 +1394,7 @@ class InteractiveArrayPlotter:
         default_x_axis, default_y_axis = self._default_scan_axis_roles()
         return (
             not self.single_axis_measurement
+            and not self.trace_axis_map_mode
             and self.x_scan_axis_index == default_x_axis
             and self.y_scan_axis_index == default_y_axis
             and self.x_sweep_mode.get() == 'alternating'
@@ -1249,7 +1487,15 @@ class InteractiveArrayPlotter:
             linecut_plotter.set_color_cycle(
                 normalized_style['extracted_linecut_color_cycle']
             )
+        traces_fitter = getattr(self, 'traces_fitter', None)
+        if traces_fitter is not None:
+            traces_fitter.set_plot_style(normalized_style)
+        self._after_plot_style_applied()
         return normalized_style
+
+    def _after_plot_style_applied(self):
+        """Hook for plotters that own additional color-dependent figures."""
+        pass
 
     def _on_x_sweep_mode_changed(self):
         """Reload and redraw the selected channel with the chosen X ordering."""
@@ -1495,7 +1741,32 @@ class InteractiveArrayPlotter:
         tick = time.perf_counter()
         self._displayed_acquisition_row_indices = None
 
-        if self.single_axis_measurement:
+        if self.trace_axis_map_mode:
+            self.X, self.Y, self.sliced_data = self._trace_axis_map_arrays()
+            self.nan_mask = (
+                np.isfinite(self.X).all(axis=1)
+                & np.isfinite(self.Y).all(axis=1)
+            )
+            self.X = self.X[self.nan_mask]
+            self.Y = self.Y[self.nan_mask]
+            self.sliced_data = self.sliced_data[self.nan_mask]
+            self.name_data_z = getattr(
+                self,
+                'trace_ylabel',
+                'Trace amplitude',
+            )
+            self.name_data_x_axis = getattr(
+                self,
+                'trace_xlabel',
+                'Trace X axis',
+            )
+            self.name_data_y_axis = self.scan_axis_names[
+                self.y_scan_axis_index
+            ]
+            self.ax.clear()
+            self.xlim = (np.nanmin(self.X), np.nanmax(self.X))
+            self.ylim = (np.nanmin(self.Y), np.nanmax(self.Y))
+        elif self.single_axis_measurement:
             x_values = np.ravel(self.data.measure_axis[0])
             original_data = np.ravel(
                 self.data.measure_data[
@@ -2688,6 +2959,7 @@ class InteractiveArrayPlotter:
             self.data,
             self.root,
             on_fit_all_complete=self.make_params_viewable,
+            plot_style=self.plot_style,
         )
         self.traces_fitter.create_widgets()
         self.traces_fitter.update_plot()
@@ -3074,15 +3346,18 @@ class InteractiveArrayPlotter:
 
     def apply_interpolation(self):
         if self.interpolation_enabled:
-            x = self._slice_current_scan_grid(
-                self._scan_coordinate_grid(self.x_scan_axis_index)
-            )
-            y = self._slice_current_scan_grid(
-                self._scan_coordinate_grid(self.y_scan_axis_index)
-            )
-            sliced_data = self._slice_current_scan_grid(
-                self._selected_signal_grid()
-            )
+            if self.trace_axis_map_mode:
+                x, y, sliced_data = self._trace_axis_map_arrays()
+            else:
+                x = self._slice_current_scan_grid(
+                    self._scan_coordinate_grid(self.x_scan_axis_index)
+                )
+                y = self._slice_current_scan_grid(
+                    self._scan_coordinate_grid(self.y_scan_axis_index)
+                )
+                sliced_data = self._slice_current_scan_grid(
+                    self._selected_signal_grid()
+                )
             interpolated_x, interpolated_y, interpolated_data = image_down_sampling(
                 sliced_data, x, y, (self.interpolation_entry_1.get(), self.interpolation_entry_2.get())
             )
@@ -4289,6 +4564,8 @@ class InteractiveArrayPlotter:
 
 
 class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
+    supports_trace_axis_map = True
+
     def __init__(
         self,
         root,
@@ -4359,14 +4636,43 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
         if hasattr(self, 'trace_canvas'):
             self.update_line_plot()
 
+    def _after_plot_style_applied(self):
+        """Redraw the trace panel with the newly selected shared color."""
+        if hasattr(self, 'trace_canvas'):
+            self.update_line_plot()
+
     def update_line_plot(self):
-        if self.single_axis_measurement:
+        if self.trace_axis_map_mode:
+            self.line_order_indeces = slice_scan_vector_for_axis(
+                self._trace_order_scan_grid(),
+                self.y_scan_axis_index,
+                self._selected_additional_index_map(),
+            )
+            if (
+                np.ndim(self.nan_mask) == 1
+                and len(self.nan_mask) == self.line_order_indeces.shape[0]
+            ):
+                self.line_order_indeces = self.line_order_indeces[
+                    self.nan_mask
+                ]
+            self.trace_y_index = min(
+                self.trace_y_index,
+                len(self.line_order_indeces) - 1,
+            )
+            self.trace_x_index = min(
+                self.trace_x_index,
+                self.X.shape[1] - 1,
+            )
+            trace_index = int(
+                self.line_order_indeces[self.trace_y_index]
+            )
+        elif self.single_axis_measurement:
             self.line_order_indeces = np.ravel(self.data.trace_order)
             trace_index = int(self.line_order_indeces[self.trace_x_index])
             self.trace_y_index = 0
         else:
             self.line_order_indeces = self._slice_current_scan_grid(
-                np.asarray(self.data.trace_order).reshape(self.scan_shape)
+                self._trace_order_scan_grid()
             )
             if self._alternating_x_sweep_enabled():
                 self.line_order_indeces = reverse_alternating_rows(
@@ -4404,6 +4710,7 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
                 np.asarray(self.trace_selected)[trace_display_indices].astype(
                     np.float32
                 ),
+                color=self._current_plot_line_color(),
             )
             self.line_ax.set_xlabel(self.trace_xlabel)
             self.line_ax.set_ylabel(self.trace_ylabel)
@@ -4411,7 +4718,13 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
         elif self.enable_hist:
             self.line_ax.set_title(f'Histogram at {self.name_data_x_axis}: {self.X[self.trace_y_index][self.trace_x_index]:.3f} ; '
                                    f'{self.name_data_y_axis}: {self.Y[self.trace_y_index][self.trace_x_index]:.3f} ')
-            self.line_ax.hist(self.trace_selected, color='blue', alpha=0.7, edgecolor='black', bins=self.nbins_traces)
+            self.line_ax.hist(
+                self.trace_selected,
+                color=self._current_plot_line_color(),
+                alpha=0.7,
+                edgecolor='black',
+                bins=self.nbins_traces,
+            )
             self.line_ax.set_xlabel(self.hist_xlabel)
             self.line_ax.set_ylabel(self.hist_ylabel)
 
@@ -4660,7 +4973,13 @@ class TracesFitter:
     A GUI application for fitting peak functions/distributions to 1D traces
     """
 
-    def __init__(self, data, master=None, on_fit_all_complete=None):
+    def __init__(
+        self,
+        data,
+        master=None,
+        on_fit_all_complete=None,
+        plot_style=None,
+    ):
 
         # Initialize trace indices
         self.trace_index_x = 0
@@ -4679,6 +4998,7 @@ class TracesFitter:
 
         self.data = data
         self.on_fit_all_complete = on_fit_all_complete
+        self.plot_style = normalize_plot_style(plot_style)
         self.fit_all_running = False
 
         self.fitted_params = [] # Store fitted parameters
@@ -4788,7 +5108,14 @@ class TracesFitter:
         self.times = self.data.traces_dt * np.arange(0, len(self.trace_selected))
 
         self.ax.clear() # Clear previous plot
-        self.ax.plot(self.times, self.trace_selected, label='Original Trace', color='blue')
+        self.ax.plot(
+            self.times,
+            self.trace_selected,
+            label='Original Trace',
+            color=resolve_plot_color(
+                self.plot_style['crosshair_histogram_color']
+            ),
+        )
         if (
             hasattr(self, 'fit_y')
             and getattr(self, 'fit_trace_index', None) == self.trace_index
@@ -4796,6 +5123,19 @@ class TracesFitter:
             self.ax.plot(self.x_data, self.fit_y, label='Fitted Curve', color='red', linestyle='--')
         self.ax.legend()
         self.canvas.draw()
+
+    def set_plot_style(self, plot_style):
+        """Apply the shared trace color without changing fitted-curve colors."""
+        self.plot_style = normalize_plot_style(plot_style)
+        line_color = resolve_plot_color(
+            self.plot_style['crosshair_histogram_color']
+        )
+        for artist in self.ax.lines:
+            if artist.get_label() == 'Original Trace':
+                artist.set_color(line_color)
+        if hasattr(self, 'canvas'):
+            self.canvas.draw_idle()
+        return self.plot_style
 
     def fit_preview_trace(self):
         """Fit the selected trace through the shared fitting implementation."""

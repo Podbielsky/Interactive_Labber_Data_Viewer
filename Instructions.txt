@@ -98,9 +98,9 @@ Changing the interface style
 - The selected theme is applied immediately to all open viewer windows.
 - The selected theme is remembered and restored the next time the viewer starts.
 - Choose Style > Plot Colors... in either the file viewer or a map plotter to
-  set the preferred map colormap, the shared crosshair-linecut/histogram color,
-  and the color cycle used by extracted linecuts. Saving applies the selection
-  to open map windows and stores it for future sessions.
+  set the preferred map colormap, the shared crosshair-linecut/trace/histogram
+  color, and the color cycle used by extracted linecuts. Saving applies the
+  selection to open map and trace windows and stores it for future sessions.
 - Selecting a colormap directly in a map plotter also updates the saved
   preferred colormap. The extracted-linecut window has a Color cycle selector
   that changes existing curves and saves the selection.
@@ -223,18 +223,34 @@ Displaying maps acquired with alternating X sweeps
 Re-arranging multidimensional scan axes
 -->
 - For measurements with three or more scan axes, open Displayed Data >
-  Re-arrange Scan Axes... in the map window. The command is disabled for one-
-  and two-axis measurements.
+  Re-arrange Scan Axes... in the map window. The ordinary map plotter keeps the
+  command disabled for one- and two-axis measurements. Plot Map with Trace Data
+  also enables it for two-axis measurements because the trace samples provide
+  an additional possible displayed dimension.
 - Choose two different scan axes for the displayed X and Y dimensions. Every
   remaining scan axis becomes a fixed-value selector on the left side of the
   map. With exactly three scan axes, the unassigned axis is therefore the
   additional selector.
+- In Plot Map with Trace Data only, the X-axis list additionally contains
+  "Time (s) (trace samples)". Select it and choose any scan axis as Y to build
+  a time-versus-scan map: the trace time/sample coordinate is X, the selected
+  scan coordinate is Y, and the stored trace amplitude is the map value. Every
+  other scan dimension becomes a fixed-value selector. The normal data-channel
+  selector is disabled in this mode because the displayed values come directly
+  from the Traces/Data dataset; it is restored when scan axes are selected
+  again.
+- Trace-axis maps require the standard Labber trace layout
+  (trace_length, 1, trace_count), one trace for every scan point, and a valid
+  trace spacing value. Only traces belonging to the selected Y line and fixed
+  additional-axis values are read, rather than loading all traces in the file.
 - Select Apply to reload the chosen two-dimensional plane from the original
   measurement arrays. Existing ROI corners, drawn lines, crosshair positions,
   and undo snapshots are cleared because their coordinates belong to the
   previous plane. Restore Default returns to the acquisition X/Y plane.
 - The selected signal, coordinates, crosshair linecuts, numerical operations,
-  exports, and—when present—trace selection all use the rearranged plane.
+  exports, and—when present—trace selection all use the rearranged plane. In a
+  trace-axis map, right-clicking a row also loads that row's complete trace in
+  the separate trace plot.
 - Alternating-X correction is available only for the original acquisition X/Y
   plane. It returns to Normal and is disabled while other scan axes are mapped
   to X or Y.

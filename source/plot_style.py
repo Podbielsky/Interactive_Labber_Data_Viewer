@@ -285,7 +285,7 @@ def open_plot_style_dialog(parent, current_style, apply_callback):
     )
     colormap_combobox.grid(row=0, column=1, sticky=tk.EW, pady=6)
 
-    ttk.Label(content, text='Crosshair and histogram:').grid(
+    ttk.Label(content, text='Crosshair, traces, and histogram:').grid(
         row=1, column=0, sticky=tk.W, padx=(0, 12), pady=6
     )
     color_combobox = ttk.Combobox(

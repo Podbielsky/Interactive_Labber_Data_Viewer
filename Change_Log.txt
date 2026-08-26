@@ -123,6 +123,9 @@ change in v0.4.8
   applied live shared-line-color changes to one-axis browser previews
 - applied the shared line-color preference to the native crosshair guides
   instead of retaining their previous hard-coded white foreground
+- applied the shared line-color preference to the map's selected-trace curve,
+  its trace histogram, and the original-data curve in the trace fitter, with
+  immediate updates in already-open trace views
 - added extracted-linecut cycles generated from every installed standard
   ttkbootstrap theme's semantic color palette
 - added Displayed Data > Re-arrange Scan Axes for measurements with at least
@@ -132,3 +135,10 @@ change in v0.4.8
 - propagated rearranged axis roles through coordinates, signal maps,
   interpolation, crosshairs, exports, and trace selection, with a default-role
   restore action and safe clearing of plane-specific overlays and undo states
+- added a trace-only X-axis choice to the re-arrange dialog used by Plot Map
+  with Trace Data; it builds time-versus-selected-scan-axis maps whose values
+  are the stored trace amplitudes
+- enabled Re-arrange for two-axis trace measurements while retaining the
+  original three-scan-axis minimum in the ordinary map plotter
+- load only the trace rows selected by the chosen Y and fixed scan dimensions,
+  and retain correct trace-to-scan ordering for multidimensional measurements
