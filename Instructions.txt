@@ -219,6 +219,26 @@ Displaying maps acquired with alternating X sweeps
   row. Normal is the default and one-axis measurements keep this setting.
 
 
+Re-arranging multidimensional scan axes
+-->
+- For measurements with three or more scan axes, open Displayed Data >
+  Re-arrange Scan Axes... in the map window. The command is disabled for one-
+  and two-axis measurements.
+- Choose two different scan axes for the displayed X and Y dimensions. Every
+  remaining scan axis becomes a fixed-value selector on the left side of the
+  map. With exactly three scan axes, the unassigned axis is therefore the
+  additional selector.
+- Select Apply to reload the chosen two-dimensional plane from the original
+  measurement arrays. Existing ROI corners, drawn lines, crosshair positions,
+  and undo snapshots are cleared because their coordinates belong to the
+  previous plane. Restore Default returns to the acquisition X/Y plane.
+- The selected signal, coordinates, crosshair linecuts, numerical operations,
+  exports, and—when present—trace selection all use the rearranged plane.
+- Alternating-X correction is available only for the original acquisition X/Y
+  plane. It returns to Normal and is disabled while other scan axes are mapped
+  to X or Y.
+
+
 Map rendering, crosshairs, and numerical precision
 -->
 - The map viewer retains the active X, Y, and signal calculation arrays at

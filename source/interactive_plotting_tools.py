@@ -58,6 +58,13 @@ plt.register_cmap(name='NeonPiCy', cmap=neon_cmap)
 rc('pdf', fonttype=42)
 
 
+def format_hdf5_label(label):
+    """Return a readable label for byte or string HDF5 metadata."""
+    if isinstance(label, (bytes, np.bytes_)):
+        return label.decode('utf-8', errors='replace')
+    return str(label)
+
+
 def configure_transparent_matplotlib_canvas(
     figure,
     canvas,
@@ -156,6 +163,56 @@ def canonicalize_plot_grid(x_grid, y_grid, data_grid):
     if transposed_score > standard_score + 1e-15:
         return x_array.T, y_array.T, data_array.T
     return x_array, y_array, data_array
+
+
+def slice_scan_grid_for_axes(
+    grid,
+    x_axis_index,
+    y_axis_index,
+    fixed_axis_indices,
+):
+    """Slice an N-D scan grid and return its selected plane in [Y, X] order."""
+    grid_array = np.asarray(grid)
+    axis_count = grid_array.ndim
+    x_axis_index = int(x_axis_index)
+    y_axis_index = int(y_axis_index)
+    if x_axis_index == y_axis_index:
+        raise ValueError('The displayed X and Y scan axes must be different.')
+    if not (
+        0 <= x_axis_index < axis_count
+        and 0 <= y_axis_index < axis_count
+    ):
+        raise ValueError('A displayed scan-axis index is out of range.')
+
+    fixed_axis_indices = dict(fixed_axis_indices)
+    expected_fixed_axes = set(range(axis_count)) - {
+        x_axis_index,
+        y_axis_index,
+    }
+    if set(fixed_axis_indices) != expected_fixed_axes:
+        raise ValueError(
+            'Every scan axis other than X and Y must have one selected index.'
+        )
+
+    selection = [slice(None)] * axis_count
+    for axis_index, selected_index in fixed_axis_indices.items():
+        selected_index = int(selected_index)
+        if not 0 <= selected_index < grid_array.shape[axis_index]:
+            raise IndexError(
+                f'Selected index {selected_index} is outside scan axis '
+                f'{axis_index} with size {grid_array.shape[axis_index]}.'
+            )
+        selection[axis_index] = selected_index
+
+    sliced_grid = grid_array[tuple(selection)]
+    remaining_axes = [
+        axis_index
+        for axis_index in range(axis_count)
+        if axis_index not in expected_fixed_axes
+    ]
+    y_position = remaining_axes.index(y_axis_index)
+    x_position = remaining_axes.index(x_axis_index)
+    return np.transpose(sliced_grid, axes=(y_position, x_position))
 
 
 def _row_direction(values):
@@ -425,15 +482,38 @@ class InteractiveArrayPlotter:
         )
         if measurement_axis_count == 0:
             raise ValueError('The measurement does not contain a sweep axis.')
-        self.single_axis_measurement = measurement_axis_count == 1
-        self.num_dimensions = (
-            0
-            if self.single_axis_measurement
-            else max(0, len(self.data.measure_dim) - 2)
+        if len(self.data.measure_dim) != measurement_axis_count:
+            raise ValueError(
+                'The number of scan-axis arrays does not match the scan shape.'
+            )
+        self.scan_axis_count = measurement_axis_count
+        self.scan_shape = tuple(
+            int(dimension) for dimension in reversed(self.data.measure_dim)
         )
+        self.scan_axis_names = [
+            format_hdf5_label(axis_name)
+            for axis_name in reversed(self.data.name_axis)
+        ]
+        self.x_scan_axis_index = self.scan_axis_count - 1
+        self.y_scan_axis_index = (
+            self.scan_axis_count - 2
+            if self.scan_axis_count >= 2
+            else None
+        )
+        self.additional_scan_axis_indices = [
+            axis_index
+            for axis_index in range(self.scan_axis_count)
+            if axis_index not in (
+                self.x_scan_axis_index,
+                self.y_scan_axis_index,
+            )
+        ]
+        self.single_axis_measurement = measurement_axis_count == 1
+        self.num_dimensions = len(self.additional_scan_axis_indices)
         print(self.num_dimensions)
-        self.name_data = [str(label) for label in self.data.name_data]
-        self.name_data = [label.encode('utf-8').decode('utf-8') for label in self.name_data]
+        self.name_data = [
+            format_hdf5_label(label) for label in self.data.name_data
+        ]
         if self.contains_traces:
             self.name_data.append("Tunneling rates in")
             self.name_data.append("Tunneling rates out")
@@ -487,6 +567,15 @@ class InteractiveArrayPlotter:
         self.data_menu.add_command(label="Cut Data to ROI", command=self.open_roi_data_cut_window)
         self.data_menu.add_command(label="Background Subtraction", command=self.open_background_subtraction_window)
         self.data_menu.add_command(label="Rename and Scale Data and Axis", command=self.open_data_axis_transform)
+        self.data_menu.add_separator()
+        self.data_menu.add_command(
+            label='Re-arrange Scan Axes…',
+            command=self.open_rearrange_scan_axes_window,
+            state=(
+                tk.NORMAL if self.scan_axis_count > 2 else tk.DISABLED
+            ),
+        )
+        self.rearrange_scan_axes_menu_index = self.data_menu.index('end')
         self.menubar.add_cascade(label="Displayed Data", menu=self.data_menu)
 
         # Create Tool Menu
@@ -639,46 +728,19 @@ class InteractiveArrayPlotter:
         self.release_cid = None
         self.start_point = None # Added by Nico Reinders for error handling in 2D FFT filter
 
-        # Pre calculate values for selection
-        self.parameter_labels = [np.flip(self.data.name_axis)[i] for i in range(self.num_dimensions)]
-        self.parameter_values = [
-            range(int(np.flip(self.data.measure_dim)[i]))
-            for i in range(self.num_dimensions)
-        ]
-        self.parameter_comboboxes = []
-
-        self.display_values_list = []
-        for i in range(self.num_dimensions):
-            display_values = []
-            for index in range(np.flip(self.data.measure_dim)[i]):
-                # Construct a selection tuple with the current index
-                selection = [0] * self.num_dimensions
-                selection[i] = index
-                value = np.flip(self.data.measure_axis, axis=0)[i].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selection)][0][0]
-                display_values.append(float(value))
-            self.display_values_list.append(display_values)
-
         # Create a custom style for label frames to make them smaller
         small_label_frame_style = ttk.Style()
         small_label_frame_style.configure('Small.TLabelframe', font=('Arial', 8))  # Adjust font size here
-        frame = ttk.Frame(self.root)
-        frame.pack(side=tk.LEFT, padx=5, pady=5)
+        self.parameter_frame = ttk.Frame(self.root)
+        self.parameter_frame.pack(side=tk.LEFT, padx=5, pady=5)
+        self.parameter_labels = []
+        self.parameter_values = []
+        self.parameter_comboboxes = []
+        self.parameter_selector_frames = []
+        self.display_values_list = []
+        self._rebuild_parameter_selectors()
         self.frame2 = ttk.Frame(self.root)
         self.frame2.pack(side=tk.RIGHT, padx=5, pady=5)
-        for i, label in enumerate(self.parameter_labels):
-
-            # Create a label frame for each parameter
-            label_frame = ttk.LabelFrame(frame, text=label)
-            label_frame.pack(padx=5, pady=5)
-
-            # Set the width of the combobox and control its placement
-            combobox = ttk.Combobox(label_frame, values=self.display_values_list[i], state='readonly', width=6)
-            combobox.pack(side=tk.BOTTOM, padx=5, pady=5)
-
-            if self.display_values_list[i]:  # Check if the list is not empty
-                combobox.set(self.display_values_list[i][0])
-
-            self.parameter_comboboxes.append(combobox)
 
         # Create a combobox for colormap selection
         self.colormap_combobox = ttk.Combobox(self.frame2, values=self.colormaps, state='readonly', width=10)
@@ -739,6 +801,7 @@ class InteractiveArrayPlotter:
             state=(tk.DISABLED if self.single_axis_measurement else tk.NORMAL),
         )
         self.alternating_x_sweep_radio.pack(anchor=tk.W, padx=4)
+        self._update_x_sweep_control_state()
 
         # Create a "Reset Plot" button inside the button frame
         self.reset_plot_button = ttk.Button(self.frame2, text="Plot", command=self.plot_data)
@@ -787,10 +850,363 @@ class InteractiveArrayPlotter:
         self.plot_data()
         self.canvas.mpl_connect('key_press_event', self.on_key_press)
 
+    def _scan_axis_description(self, axis_index):
+        """Return an unambiguous label for a logical scan-grid dimension."""
+        acquisition_axis_number = self.scan_axis_count - int(axis_index)
+        return (
+            f'{self.scan_axis_names[axis_index]} '
+            f'(scan axis {acquisition_axis_number})'
+        )
+
+    def _scan_coordinate_grid(self, axis_index):
+        """Reshape one stored scan coordinate into the logical N-D grid."""
+        coordinate_array = np.asarray(
+            list(reversed(self.data.measure_axis))[axis_index]
+        )
+        return coordinate_array.swapaxes(0, 1).reshape(self.scan_shape)
+
+    def _selected_additional_index_map(self):
+        """Return the current fixed index for every non-displayed scan axis."""
+        selected_indices = {}
+        for list_index, axis_index in enumerate(
+            self.additional_scan_axis_indices
+        ):
+            combobox = self.parameter_comboboxes[list_index]
+            selected_index = combobox.current()
+            if selected_index < 0:
+                try:
+                    selected_value = float(combobox.get())
+                    selected_index = self.display_values_list[list_index].index(
+                        selected_value
+                    )
+                except (ValueError, IndexError):
+                    selected_index = 0
+            selected_indices[axis_index] = selected_index
+        return selected_indices
+
+    def _additional_axis_display_values(self, axis_index):
+        """Return representative coordinate values for a fixed-axis selector."""
+        coordinate_grid = self._scan_coordinate_grid(axis_index)
+        display_values = []
+        for selected_index in range(self.scan_shape[axis_index]):
+            selection = [0] * self.scan_axis_count
+            selection[axis_index] = selected_index
+            display_values.append(float(coordinate_grid[tuple(selection)]))
+        return display_values
+
+    def _rebuild_parameter_selectors(self, preserved_indices=None):
+        """Recreate selectors for all axes that are not assigned to X or Y."""
+        preserved_indices = dict(preserved_indices or {})
+        for selector_frame in self.parameter_selector_frames:
+            selector_frame.destroy()
+
+        self.parameter_labels = [
+            self.scan_axis_names[axis_index]
+            for axis_index in self.additional_scan_axis_indices
+        ]
+        self.parameter_values = [
+            range(self.scan_shape[axis_index])
+            for axis_index in self.additional_scan_axis_indices
+        ]
+        self.parameter_comboboxes = []
+        self.parameter_selector_frames = []
+        self.display_values_list = []
+
+        for axis_index, label in zip(
+            self.additional_scan_axis_indices,
+            self.parameter_labels,
+        ):
+            display_values = self._additional_axis_display_values(axis_index)
+            self.display_values_list.append(display_values)
+            label_frame = ttk.LabelFrame(self.parameter_frame, text=label)
+            label_frame.pack(padx=5, pady=5)
+            self.parameter_selector_frames.append(label_frame)
+            combobox = ttk.Combobox(
+                label_frame,
+                values=display_values,
+                state='readonly',
+                width=10,
+            )
+            combobox.pack(side=tk.BOTTOM, padx=5, pady=5)
+            selected_index = min(
+                max(int(preserved_indices.get(axis_index, 0)), 0),
+                len(display_values) - 1,
+            )
+            if display_values:
+                combobox.current(selected_index)
+            self.parameter_comboboxes.append(combobox)
+
+    def _selected_signal_grid(self):
+        """Return the selected stored or derived signal as a logical N-D grid."""
+        selected_name = self.data_combobox.get()
+        stored_channel_count = len(self.data.measure_data)
+        if selected_name in self.name_data[:stored_channel_count]:
+            channel_index = self.name_data.index(selected_name)
+            return np.asarray(
+                self.data.measure_data[channel_index]
+            ).swapaxes(0, 1).reshape(self.scan_shape)
+
+        fit_results = getattr(self, 'fit_results_dict', None)
+        if fit_results is None:
+            traces_fitter = getattr(self, 'traces_fitter', None)
+            fit_results = getattr(traces_fitter, 'fit_results_dict', {})
+        if selected_name in fit_results:
+            return np.asarray(fit_results[selected_name]).reshape(
+                self.scan_shape
+            )
+
+        if selected_name in ('Tunneling rates in', 'Tunneling rates out'):
+            if not self.loaded:
+                self.data.set_traces()
+                self.data.set_traces_dt()
+                self.traces = self.data.traces
+                self.times = self.data.traces_dt * np.arange(
+                    0, len(self.traces[0][0])
+                )
+                self.loaded = True
+            if not self.calculated:
+                _, self.gamma_up, self.gamma_down = get_t_rates(
+                    self.traces,
+                    self.times,
+                )
+                self.calculated = True
+            rates = (
+                self.gamma_up
+                if selected_name == 'Tunneling rates in'
+                else self.gamma_down
+            )
+            return np.asarray(rates).reshape(self.scan_shape)
+
+        raise ValueError(f'No data array is available for {selected_name!r}.')
+
+    def _slice_current_scan_grid(self, grid):
+        """Slice a full scan grid using the current axis roles and selectors."""
+        return slice_scan_grid_for_axes(
+            grid,
+            self.x_scan_axis_index,
+            self.y_scan_axis_index,
+            self._selected_additional_index_map(),
+        )
+
+    def _default_scan_axis_roles(self):
+        return self.scan_axis_count - 1, self.scan_axis_count - 2
+
+    def _update_x_sweep_control_state(self):
+        """Allow serpentine correction only for the acquisition X/Y plane."""
+        if not hasattr(self, 'alternating_x_sweep_radio'):
+            return
+        default_x_axis, default_y_axis = self._default_scan_axis_roles()
+        correction_available = (
+            not self.single_axis_measurement
+            and self.x_scan_axis_index == default_x_axis
+            and self.y_scan_axis_index == default_y_axis
+        )
+        if not correction_available:
+            self.x_sweep_mode.set('normal')
+        self.alternating_x_sweep_radio.configure(
+            state=(tk.NORMAL if correction_available else tk.DISABLED)
+        )
+
+    def open_rearrange_scan_axes_window(self):
+        """Choose the two displayed dimensions of a multidimensional scan."""
+        if self.scan_axis_count <= 2:
+            return None
+        existing_window = getattr(self, 'rearrange_scan_axes_window', None)
+        if existing_window is not None and existing_window.winfo_exists():
+            existing_window.lift()
+            existing_window.focus_force()
+            return existing_window
+
+        dialog = ttk.Toplevel(self.root)
+        self.rearrange_scan_axes_window = dialog
+        dialog.title('Re-arrange Scan Axes')
+        dialog.geometry('560x300')
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        content = ttk.Frame(dialog, padding=14)
+        content.pack(fill=tk.BOTH, expand=True)
+        content.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            content,
+            text=(
+                'Choose two different scan axes for the map. Every remaining '
+                'axis becomes a fixed-value selector beside the plot.'
+            ),
+            wraplength=520,
+        ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 12))
+
+        axis_descriptions = [
+            self._scan_axis_description(axis_index)
+            for axis_index in range(self.scan_axis_count)
+        ]
+        x_axis_variable = tk.StringVar(
+            master=dialog,
+            value=axis_descriptions[self.x_scan_axis_index],
+        )
+        y_axis_variable = tk.StringVar(
+            master=dialog,
+            value=axis_descriptions[self.y_scan_axis_index],
+        )
+        additional_axes_variable = tk.StringVar(master=dialog)
+
+        ttk.Label(content, text='Displayed X axis:').grid(
+            row=1, column=0, sticky=tk.W, padx=(0, 10), pady=6
+        )
+        x_axis_combobox = ttk.Combobox(
+            content,
+            textvariable=x_axis_variable,
+            values=axis_descriptions,
+            state='readonly',
+            width=34,
+        )
+        x_axis_combobox.grid(row=1, column=1, sticky=tk.EW, pady=6)
+        ttk.Label(content, text='Displayed Y axis:').grid(
+            row=2, column=0, sticky=tk.W, padx=(0, 10), pady=6
+        )
+        y_axis_combobox = ttk.Combobox(
+            content,
+            textvariable=y_axis_variable,
+            values=axis_descriptions,
+            state='readonly',
+            width=34,
+        )
+        y_axis_combobox.grid(row=2, column=1, sticky=tk.EW, pady=6)
+        ttk.Label(content, text='Additional selectors:').grid(
+            row=3, column=0, sticky=tk.NW, padx=(0, 10), pady=6
+        )
+        ttk.Label(
+            content,
+            textvariable=additional_axes_variable,
+            wraplength=350,
+        ).grid(row=3, column=1, sticky=tk.W, pady=6)
+
+        def selected_axis_indices():
+            return (
+                axis_descriptions.index(x_axis_variable.get()),
+                axis_descriptions.index(y_axis_variable.get()),
+            )
+
+        def update_additional_axes(_event=None):
+            x_axis_index, y_axis_index = selected_axis_indices()
+            additional_axes_variable.set(', '.join(
+                axis_descriptions[axis_index]
+                for axis_index in range(self.scan_axis_count)
+                if axis_index not in (x_axis_index, y_axis_index)
+            ) or 'None')
+
+        x_axis_combobox.bind('<<ComboboxSelected>>', update_additional_axes)
+        y_axis_combobox.bind('<<ComboboxSelected>>', update_additional_axes)
+        update_additional_axes()
+
+        def apply_roles():
+            x_axis_index, y_axis_index = selected_axis_indices()
+            if x_axis_index == y_axis_index:
+                messagebox.showerror(
+                    'Invalid Scan Axes',
+                    'The displayed X and Y axes must be different.',
+                    parent=dialog,
+                )
+                return
+            self.apply_scan_axis_roles(x_axis_index, y_axis_index)
+            dialog.destroy()
+
+        def restore_default_roles():
+            default_x_axis, default_y_axis = self._default_scan_axis_roles()
+            x_axis_variable.set(axis_descriptions[default_x_axis])
+            y_axis_variable.set(axis_descriptions[default_y_axis])
+            update_additional_axes()
+
+        button_frame = ttk.Frame(content)
+        button_frame.grid(
+            row=4, column=0, columnspan=2, sticky=tk.EW, pady=(18, 0)
+        )
+        ttk.Button(
+            button_frame,
+            text='Restore Default',
+            command=restore_default_roles,
+            bootstyle='secondary',
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            button_frame,
+            text='Cancel',
+            command=dialog.destroy,
+            bootstyle='secondary',
+        ).pack(side=tk.RIGHT, padx=(8, 0))
+        ttk.Button(
+            button_frame,
+            text='Apply',
+            command=apply_roles,
+            bootstyle='primary',
+        ).pack(side=tk.RIGHT)
+        return dialog
+
+    def apply_scan_axis_roles(self, x_axis_index, y_axis_index):
+        """Assign scan dimensions to X/Y and rebuild the selected map plane."""
+        x_axis_index = int(x_axis_index)
+        y_axis_index = int(y_axis_index)
+        if self.scan_axis_count <= 2:
+            raise ValueError('Scan-axis rearrangement requires at least 3 axes.')
+        if x_axis_index == y_axis_index:
+            raise ValueError('The displayed X and Y axes must be different.')
+        if not (
+            0 <= x_axis_index < self.scan_axis_count
+            and 0 <= y_axis_index < self.scan_axis_count
+        ):
+            raise ValueError('A selected scan axis is out of range.')
+
+        preserved_indices = self._selected_additional_index_map()
+        self.x_scan_axis_index = x_axis_index
+        self.y_scan_axis_index = y_axis_index
+        self.additional_scan_axis_indices = [
+            axis_index
+            for axis_index in range(self.scan_axis_count)
+            if axis_index not in (x_axis_index, y_axis_index)
+        ]
+        self.num_dimensions = len(self.additional_scan_axis_indices)
+        self._rebuild_parameter_selectors(preserved_indices)
+        self._update_x_sweep_control_state()
+
+        self.x_index = 0
+        self.y_index = 0
+        self.invert_enabled = False
+        if hasattr(self, 'trace_x_index'):
+            self.trace_x_index = 0
+        if hasattr(self, 'trace_y_index'):
+            self.trace_y_index = 0
+        self.freeze_linecut = False
+        self.linecut_position = None
+        self._last_crosshair_indices = None
+        self._last_crosshair_canvas_coordinates = None
+        self._pending_crosshair_position = None
+        self._pending_linecut_request = None
+        self._current_linecut_request = None
+        self._linecut_axes_signature = None
+        self._set_crosshair_overlay_state('hidden')
+        if self.roi_mode:
+            self.toggle_roi()
+        self.roi_corners = []
+        self._hide_roi_preview()
+        self._remove_current_roi_patch()
+        self._cancel_in_progress_line_drawing()
+        self.drawn_lines_list = []
+        self.linecut_settings_list = []
+        if hasattr(self, 'lines_listbox'):
+            self.update_lines_listbox()
+        if hasattr(self, 'editing_line'):
+            self.editing_line = False
+            self.editing_line_index = None
+        self.plot_data()
+        if self.crosshair_enabled:
+            self.refresh_crosshair()
+
     def _alternating_x_sweep_enabled(self):
         """Return whether the displayed map should undo serpentine X scans."""
+        default_x_axis, default_y_axis = self._default_scan_axis_roles()
         return (
             not self.single_axis_measurement
+            and self.x_scan_axis_index == default_x_axis
+            and self.y_scan_axis_index == default_y_axis
             and self.x_sweep_mode.get() == 'alternating'
         )
 
@@ -1126,15 +1542,6 @@ class InteractiveArrayPlotter:
         tick = time.perf_counter()
         self._displayed_acquisition_row_indices = None
 
-        # Get selected parameter values from comboboxes
-        selected_display_values = [combobox.get() for combobox in self.parameter_comboboxes]
-        selected_indices = []
-
-        for i, display_value in enumerate(selected_display_values):
-            # Convert the display value back to an index
-            index = self.display_values_list[i].index(float(display_value))
-            selected_indices.append(index)
-
         if self.single_axis_measurement:
             x_values = np.ravel(self.data.measure_axis[0])
             original_data = np.ravel(
@@ -1169,105 +1576,43 @@ class InteractiveArrayPlotter:
             self.name_data_z = self.data_combobox.get()
             self.name_data_x_axis = str(self.data.name_axis[0])
             self.name_data_y_axis = 'y-dummy'
-
-
-
         else:
-            # Use selected values to slice and plot data
-            if not self.invert_enabled:
-                self.X = (np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])
-                self.nan_mask = ~np.isnan(self.X).any(axis=1)
+            self.X = self._slice_current_scan_grid(
+                self._scan_coordinate_grid(self.x_scan_axis_index)
+            )
+            self.Y = self._slice_current_scan_grid(
+                self._scan_coordinate_grid(self.y_scan_axis_index)
+            )
+            self.sliced_data = self._slice_current_scan_grid(
+                self._selected_signal_grid()
+            )
+            self.nan_mask = ~np.isnan(self.X).any(axis=1)
+            if self._alternating_x_sweep_enabled():
                 self._displayed_acquisition_row_indices = np.flatnonzero(
                     self.nan_mask
                 )
-                self.X = self.X[self.nan_mask]
-                self.Y = (np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(
-                    0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
-                try:
-                    self.sliced_data = ((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
-                        0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]
-                except ValueError:
-                    if hasattr(self.traces_fitter, 'fit_results_dict') and self.data_combobox.get() in self.traces_fitter.fit_results_dict:
-                        print(self.traces_fitter.fit_results_dict.keys())
-                        self.sliced_data = (self.traces_fitter.fit_results_dict[self.data_combobox.get()]).reshape(np.flip(self.data.measure_dim))
-                        print('Using fit results for plotting.')
+            self.X = self.X[self.nan_mask]
+            self.Y = self.Y[self.nan_mask]
+            self.sliced_data = self.sliced_data[self.nan_mask]
+            self.name_data_z = self.data_combobox.get()
+            self.name_data_x_axis = self.scan_axis_names[
+                self.x_scan_axis_index
+            ]
+            self.name_data_y_axis = self.scan_axis_names[
+                self.y_scan_axis_index
+            ]
 
-                except IndexError:
-
-                    if not self.loaded:
-                        print('fetching data...')
-                        self.data.set_traces()
-                        self.data.set_traces_dt()
-                        self.traces = self.data.traces
-                        self.times = self.data.traces_dt * np.arange(0, len(self.traces[0][0]))
-                        self.loaded = True
-                    else:
-                        pass
-
-                    if not self.calculated:
-                        print('calculating tunneling rates...')
-                        _, self.gamma_up, self.gamma_down = get_t_rates(self.traces, self.times)
-                        self.calculated = True
-                    else:
-                        pass
-
-                    if self.data_combobox.get() == "Tunneling rates in":
-                        self.sliced_data = self.gamma_up
-                    elif self.data_combobox.get() == "Tunneling rates out":
-                        self.sliced_data = self.gamma_down
-
-
-                self.ax.clear()
-                self.xlim = (np.min(self.X), np.max(self.X))
-                self.ylim = (np.min(self.Y), np.max(self.Y))
-
-                self.name_data_z = self.data_combobox.get()
-                self.name_data_x_axis = str(np.flip(self.data.name_axis)[-1])
-                self.name_data_y_axis = str(np.flip(self.data.name_axis)[-2])
-            #### Modified by Nico Reinders ####
             if self.invert_enabled:
-                self.X = ((np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(0, 1).reshape(
-                    np.flip(self.data.measure_dim))[tuple(selected_indices)]))
-                self.nan_mask = ~np.isnan(self.X).any(axis=1)
-                self.X = (self.X[self.nan_mask]).T
+                self.X, self.Y = self.Y.T, self.X.T
+                self.sliced_data = self.sliced_data.T
+                self.name_data_x_axis, self.name_data_y_axis = (
+                    self.name_data_y_axis,
+                    self.name_data_x_axis,
+                )
 
-                self.Y = ((np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(
-                    np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]).T
-                try:
-                    self.sliced_data = (((self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(
-                        0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)])[self.nan_mask]).T
-                except IndexError:
-                    if not self.loaded:
-                        print('fetching data...')
-                        self.data.set_traces()
-                        self.data.set_traces_dt()
-                        self.traces = self.data.traces
-                        self.times = self.data.traces_dt * np.arange(0, len(self.traces[0][0]))
-                        self.loaded = True
-                    else:
-                        pass
-
-                    if not self.calculated:
-                        print('calculating tunneling rates...')
-                        _, self.gamma_up, self.gamma_down = get_t_rates(self.traces, self.times)
-                        self.gamma_up.T
-                        self.gamma_down.T
-                        self.calculated = True
-                    else:
-                        pass
-
-                    if self.data_combobox.get() == "Tunneling rates in":
-                        self.sliced_data = self.gamma_up.transpose()
-                    elif self.data_combobox.get() == "Tunneling rates out":
-                        self.sliced_data = self.gamma_down.transpose()
-                #### end of Modification by Nico Reinders ####
-                self.ax.clear()
-                self.xlim = (np.min(self.X), np.max(self.X))
-                self.ylim = (np.min(self.Y), np.max(self.Y))
-
-                self.name_data_z = self.data_combobox.get()
-                self.name_data_y_axis = str(np.flip(self.data.name_axis)[-1])
-                self.name_data_x_axis = str(np.flip(self.data.name_axis)[-2])
+            self.ax.clear()
+            self.xlim = (np.nanmin(self.X), np.nanmax(self.X))
+            self.ylim = (np.nanmin(self.Y), np.nanmax(self.Y))
 
         self.X, self.Y, self.sliced_data = canonicalize_plot_grid(
             self.X,
@@ -2762,17 +3107,15 @@ class InteractiveArrayPlotter:
 
     def apply_interpolation(self):
         if self.interpolation_enabled:
-            selected_display_values = [combobox.get() for combobox in self.parameter_comboboxes]
-            selected_indices = []
-            for i, display_value in enumerate(selected_display_values):
-                # Convert the display value back to an index
-                index = self.display_values_list[i].index(float(display_value))
-                selected_indices.append(index)
-
-            # Use selected values to slice and plot data
-            x = np.flip(self.data.measure_axis, axis=0)[-1].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)]
-            y = np.flip(self.data.measure_axis, axis=0)[-2].swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)]
-            sliced_data = (self.data.measure_data[self.name_data.index(self.data_combobox.get())]).swapaxes(0, 1).reshape(np.flip(self.data.measure_dim))[tuple(selected_indices)]
+            x = self._slice_current_scan_grid(
+                self._scan_coordinate_grid(self.x_scan_axis_index)
+            )
+            y = self._slice_current_scan_grid(
+                self._scan_coordinate_grid(self.y_scan_axis_index)
+            )
+            sliced_data = self._slice_current_scan_grid(
+                self._selected_signal_grid()
+            )
             interpolated_x, interpolated_y, interpolated_data = image_down_sampling(
                 sliced_data, x, y, (self.interpolation_entry_1.get(), self.interpolation_entry_2.get())
             )
@@ -4050,20 +4393,14 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
             self.update_line_plot()
 
     def update_line_plot(self):
-        selected_display_values = [combobox.get() for combobox in self.parameter_comboboxes]
-        selected_indices = []
-        for i, display_value in enumerate(selected_display_values):
-            # Convert the display value back to an index
-            index = self.display_values_list[i].index(float(display_value))
-            selected_indices.append(index)
         if self.single_axis_measurement:
             self.line_order_indeces = np.ravel(self.data.trace_order)
             trace_index = int(self.line_order_indeces[self.trace_x_index])
             self.trace_y_index = 0
         else:
-            self.line_order_indeces = (self.data.trace_order).reshape(
-                np.flip(self.data.measure_dim)
-            )[tuple(selected_indices)]
+            self.line_order_indeces = self._slice_current_scan_grid(
+                np.asarray(self.data.trace_order).reshape(self.scan_shape)
+            )
             if self._alternating_x_sweep_enabled():
                 self.line_order_indeces = reverse_alternating_rows(
                     self.line_order_indeces

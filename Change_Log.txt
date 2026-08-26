@@ -121,3 +121,10 @@ change in v0.4.8
   an already-open map preview when the global plotting style changes
 - added extracted-linecut cycles generated from every installed standard
   ttkbootstrap theme's semantic color palette
+- added Displayed Data > Re-arrange Scan Axes for measurements with at least
+  three scan dimensions, while leaving the command disabled for smaller scans
+- added validated N-dimensional slicing that assigns any two scan axes to the
+  displayed X/Y plane and rebuilds selectors for all remaining dimensions
+- propagated rearranged axis roles through coordinates, signal maps,
+  interpolation, crosshairs, exports, and trace selection, with a default-role
+  restore action and safe clearing of plane-specific overlays and undo states
