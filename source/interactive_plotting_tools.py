@@ -12,7 +12,6 @@ import numpy as np
 import matplotlib
 matplotlib.use('TkAgg')
 from matplotlib.figure import Figure
-import matplotlib.pyplot as plt
 from matplotlib import lines
 from matplotlib import rc
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -52,10 +51,10 @@ neon_cmap = make_neon_cyclic_colormap()
 bi_map = make_bi_colormap() # take out
 half_red_map = make_half_red_map()
 half_blue_map = make_half_blue_map()
-plt.register_cmap(name='BiMap', cmap=bi_map)
-plt.register_cmap(name='RedMap', cmap=half_red_map)
-plt.register_cmap(name='BlueMap', cmap=half_blue_map)
-plt.register_cmap(name='NeonPiCy', cmap=neon_cmap)
+matplotlib.cm.register_cmap(name='BiMap', cmap=bi_map)
+matplotlib.cm.register_cmap(name='RedMap', cmap=half_red_map)
+matplotlib.cm.register_cmap(name='BlueMap', cmap=half_blue_map)
+matplotlib.cm.register_cmap(name='NeonPiCy', cmap=neon_cmap)
 rc('pdf', fonttype=42)
 
 
@@ -517,7 +516,8 @@ class InteractiveHistogramPlotter:
         self.create_widgets()
 
     def create_widgets(self):
-        self.fig, self.ax = plt.subplots()
+        self.fig = Figure()
+        self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.root)
         configure_transparent_matplotlib_canvas(self.fig, self.canvas)
         self.canvas_widget = self.canvas.get_tk_widget()
@@ -589,11 +589,15 @@ class InteractiveArrayPlotter:
         ax=None,
         plot_style=None,
         plot_style_change_callback=None,
+        close_callback=None,
     ):
         self.root = root
         self.root.title("Interactive Array Plotter")
         self.plot_style = normalize_plot_style(plot_style)
         self.plot_style_change_callback = plot_style_change_callback
+        self.close_callback = close_callback
+        self._closed = False
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         # Initialize attributes
         self.data = hdf5data
@@ -686,7 +690,7 @@ class InteractiveArrayPlotter:
         self.file_menu.add_command(label="Save whole data as NumPy array", command=self.save_file)
         self.file_menu.add_command(label="Save displayed data as NumPy array", command=self.save_data)
         self.file_menu.add_separator()
-        self.file_menu.add_command(label="Exit", command=self.root.quit)
+        self.file_menu.add_command(label="Exit", command=self.close)
         self.menubar.add_cascade(label="File", menu=self.file_menu)
 
         # Create Data Display Menu
@@ -736,7 +740,8 @@ class InteractiveArrayPlotter:
 
         # Create a figure and axis for plotting
         if figure is None or ax is None:
-            self.figure, self.ax = plt.subplots()
+            self.figure = Figure()
+            self.ax = self.figure.add_subplot(111)
         else:
             self.figure, self.ax = figure, ax
 
@@ -775,7 +780,8 @@ class InteractiveArrayPlotter:
         self.vertical_linecut_frame.grid_remove()
 
         # Create a new figure for the histogram
-        self.histogram_fig, self.histogram_ax = plt.subplots(figsize=(3.5, 1.5))
+        self.histogram_fig = Figure(figsize=(3.5, 1.5))
+        self.histogram_ax = self.histogram_fig.add_subplot(111)
         self.histogram_ax.set_yticklabels([])
         self.histogram_ax.set_xticklabels([])
         self.picked_line = None
@@ -2258,7 +2264,7 @@ class InteractiveArrayPlotter:
                 self._hide_roi_preview()
                 self._remove_current_roi_patch()
                 self.current_roi_patch = self.ax.add_patch(
-                    plt.Rectangle(
+                    matplotlib.patches.Rectangle(
                         (xmin, ymin),
                         xmax - xmin,
                         ymax - ymin,
@@ -3073,7 +3079,8 @@ class InteractiveArrayPlotter:
         self.fft_plot_window.title("FFT Correction")
 
         # Create a Matplotlib figure and axis
-        self.fft_fig, self.fft_ax = plt.subplots(1, 1)
+        self.fft_fig = Figure()
+        self.fft_ax = self.fft_fig.add_subplot(111)
 
         # Create a canvas to embed the figure into the Tkinter window
         self.fft_canvas = FigureCanvasTkAgg(self.fft_fig, master=self.fft_plot_window)
@@ -3114,7 +3121,8 @@ class InteractiveArrayPlotter:
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=1)
 
         # Create a Matplotlib figure and axis for the FFT filter
-        self.fft_filter_fig, self.fft_filter_ax = plt.subplots(1, 1, figsize=(6, 6))
+        self.fft_filter_fig = Figure(figsize=(6, 6))
+        self.fft_filter_ax = self.fft_filter_fig.add_subplot(111)
 
         self.fft_filter_canvas = FigureCanvasTkAgg(self.fft_filter_fig, master=left_frame)
         configure_transparent_matplotlib_canvas(
@@ -3284,7 +3292,7 @@ class InteractiveArrayPlotter:
                 self.preview_rectangle = matplotlib.patches.Rectangle((x0, y0), width, height, edgecolor='white', facecolor='none', linestyle='--')
                 self.fft_filter_ax.add_patch(self.preview_rectangle)
 
-            plt.draw()
+            self.fft_filter_canvas.draw_idle()
 
     def fft_filter_on_release(self, event):
         #### Created by Nico Reinders ####
@@ -3326,7 +3334,7 @@ class InteractiveArrayPlotter:
                     self.preview_rectangle.remove()
                     del self.preview_rectangle
 
-            plt.draw()
+            self.fft_filter_canvas.draw_idle()
 
         # Right mouse button to remove shapes
 
@@ -3372,7 +3380,7 @@ class InteractiveArrayPlotter:
             self.fft_filter_ax.set_title('FFT Amp of ' + self.name_data_z)
 
 
-            plt.draw()
+            self.fft_filter_canvas.draw_idle()
         else:
             # Filtered Data Preview
 
@@ -3702,7 +3710,7 @@ class InteractiveArrayPlotter:
         #### Modified by Nico Reinders ####
         self.cuts = get_cuts(self.fft_ax)
         print(self.cuts)
-        plt.close(self.fft_fig)
+        self.fft_fig.clear()
 
         self.traces = fft_correction_apply(self.traces, self.cuts, self.frequencies_shifted, self.fft_signals,
                                            self.original_angles)
@@ -4660,46 +4668,12 @@ class InteractiveArrayPlotter:
 
     ### reset functions ###
 
-    def reset(self):
-        self.clear_data_operation_history()
+    def close(self):
+        """Release Tk callbacks and Matplotlib resources for this plotter."""
+        if getattr(self, '_closed', False):
+            return
+        self._closed = True
 
-        # Clear the plot
-        self.ax.clear()
-        self.ax_vline.clear()
-        self.ax_hline.clear()
-        self.histogram_ax.clear()
-
-        # Reset UI elements to their default states
-        self.colormap_combobox.set(self.plot_style['preferred_colormap'])
-        self.data_combobox.set(self.name_data[0]) if self.name_data else None
-        for combobox in self.parameter_comboboxes:
-            if combobox['values']:
-                combobox.set(combobox['values'][0])
-
-        # Hide additional axes and reset crosshair state
-        self.ax_vline.set_visible(False)
-        self.ax_hline.set_visible(False)
-        self.crosshair_enabled = False
-        self.canvas.get_tk_widget().configure(cursor='')
-        self._set_crosshair_overlay_state('hidden')
-        self._hide_roi_preview()
-        self._hide_line_preview()
-
-        # Reset internal data or state as needed
-        self.sliced_data = None
-        self.X, self.Y = None, None
-        self.display_sliced_data = None
-        self.display_X, self.display_Y = None, None
-        self.xlim, self.ylim = None, None
-        self.relation_parameter_entry_list = []
-        self.drawn_lines_list = []
-        self.linecut_settings_list = []
-
-        # Redraw the canvas to reflect the reset state
-        self.canvas.draw_idle()
-        self.horizontal_linecut_canvas.draw_idle()
-        self.vertical_linecut_canvas.draw_idle()
-        self.histogram_canvas.draw_idle()
         for callback_attribute in (
             '_display_resize_after_id',
             '_crosshair_update_after_id',
@@ -4708,7 +4682,57 @@ class InteractiveArrayPlotter:
             '_line_preview_after_id',
         ):
             self._cancel_scheduled_callback(callback_attribute)
-        self.root.destroy()
+
+        # These figures are embedded in this Toplevel.  Clearing them removes
+        # artists and callback references before the Tk widgets are destroyed.
+        seen_figures = set()
+        for figure_attribute in (
+            'figure',
+            'horizontal_linecut_figure',
+            'vertical_linecut_figure',
+            'histogram_fig',
+            'trace_figure',
+            'fft_fig',
+            'fft_filter_fig',
+        ):
+            figure = getattr(self, figure_attribute, None)
+            if figure is None or id(figure) in seen_figures:
+                continue
+            seen_figures.add(id(figure))
+            try:
+                figure.clear()
+            except (AttributeError, RuntimeError, ValueError):
+                pass
+            setattr(self, figure_attribute, None)
+
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
+        # Break references to Tk canvases and the shared HDF5 model.  The main
+        # viewer remains the owner of the file handle and closes it separately.
+        for canvas_attribute in (
+            'canvas',
+            'horizontal_linecut_canvas',
+            'vertical_linecut_canvas',
+            'histogram_canvas',
+            'trace_canvas',
+            'fft_canvas',
+            'fft_filter_canvas',
+        ):
+            if hasattr(self, canvas_attribute):
+                setattr(self, canvas_attribute, None)
+        self.data = None
+
+        close_callback = self.close_callback
+        self.close_callback = None
+        if close_callback is not None:
+            close_callback(self)
+
+    def reset(self):
+        self.clear_data_operation_history()
+        self.close()
 
 
 class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
@@ -4720,6 +4744,7 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
         hdf5data,
         plot_style=None,
         plot_style_change_callback=None,
+        close_callback=None,
     ):
 
         self.trace_x_index = 0
@@ -4759,6 +4784,7 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
             self.ax,
             plot_style=plot_style,
             plot_style_change_callback=plot_style_change_callback,
+            close_callback=close_callback,
         )
         self.canvas.mpl_connect('button_press_event', self.on_right_click)
         self.file_menu.add_command(label="Save displayed Trace as NumPy array", command=self.save_trace)
@@ -5041,12 +5067,11 @@ class InteractiveArrayAndLinePlotter(InteractiveArrayPlotter):
 
 
     def reset(self):
-        super().reset()
-
         self.line_ax.clear()
         self.line_order_indeces = None
         self.times = None
         self.trace_selected = None
+        super().reset()
 
 
 class InteractiveTimeTraceMapPlotter(InteractiveArrayPlotter):
@@ -5262,7 +5287,7 @@ class TracesFitter:
         self.fit_results = [] # Store fit results
 
         # Create matplotlib figure and axis
-        self.fig = plt.Figure(figsize=(6, 5), dpi=100)
+        self.fig = Figure(figsize=(6, 5), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.ax.set_xlabel(
             getattr(self.data, 'trace_axis_name', None) or 'Trace X'
@@ -5658,7 +5683,7 @@ class UtilityLinePlotter:
         self.color_cycle_change_callback = color_cycle_change_callback
 
         # Create the figure and axis for plotting
-        self.fig = plt.Figure(figsize=(6, 5), dpi=100)
+        self.fig = Figure(figsize=(6, 5), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.ax.set_xlabel('Distance')
         self.ax.set_ylabel('Value')

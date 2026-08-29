@@ -826,8 +826,14 @@ class HDF5Data:
     def set_path(self, path_read_inout, intention='r'):
         if intention == 'r':
             path_changed = self.readpath != path_read_inout
+            if path_changed:
+                # A File object belongs to one concrete path.  Keeping it when
+                # readpath changes leaves the previous HDF5 file locked and can
+                # also make subsequent reads use objects from the wrong file.
+                self.close_file()
             self.readpath = path_read_inout
             if path_changed:
+                self.channels = None
                 self.trace_dataset_path = None
                 self.trace_group_path = None
                 self.trace_channel_name = None
@@ -841,10 +847,64 @@ class HDF5Data:
             self.savepath = path_read_inout
 
     def set_data(self):
+        """Open the selected file once and reuse the live read/write handle."""
+        if not self.readpath:
+            print("Error setting HDF5 data: no read path has been selected")
+            return None
+
+        normalized_path = os.path.abspath(os.path.expanduser(self.readpath))
+        if self.file is not None:
+            try:
+                current_path = os.path.abspath(self.file.filename)
+                if (
+                    self.file.id.valid
+                    and current_path == normalized_path
+                    and self.file.mode == 'r+'
+                ):
+                    return self.file
+            except (AttributeError, OSError, RuntimeError, ValueError):
+                pass
+            self.close_file()
+
         try:
-            self.file = h5py.File(self.readpath, "r+")
+            self.file = h5py.File(normalized_path, "r+")
         except Exception as e:
+            self.file = None
             print(f"Error setting HDF5 data: {e}")
+        return self.file
+
+    def close_file(self):
+        """Flush and close the owned HDF5 handle; safe to call repeatedly."""
+        hdf5_file = self.file
+
+        # Datasets and groups retain their HDF5 file internally.  Drop every
+        # such long-lived reference before closing the owning File object.
+        self.file = None
+        self.channels = None
+        self.trace_reference = None
+
+        if hdf5_file is None:
+            return False
+
+        try:
+            is_open = bool(hdf5_file.id.valid)
+        except (AttributeError, RuntimeError, ValueError):
+            is_open = False
+        if not is_open:
+            return False
+
+        try:
+            if hdf5_file.mode != 'r':
+                hdf5_file.flush()
+        except (OSError, RuntimeError, ValueError) as error:
+            print(f"Could not flush HDF5 data while closing: {error}")
+
+        try:
+            hdf5_file.close()
+        except (OSError, RuntimeError, ValueError) as error:
+            print(f"Could not close HDF5 data: {error}")
+            return False
+        return True
 
     def get_trace_group(self):
         """Return the compatible trace group in the currently open file."""
@@ -1134,8 +1194,7 @@ class HDF5Data:
 
             if copied_file_path:
                 # Close the original HDF5 file
-                if self.file:
-                    self.file.close()
+                self.close_file()
 
                 # Delete the original data
                 os.remove(self.readpath)
@@ -1455,7 +1514,7 @@ class HDF5Data:
             self.add_group_and_datasets('Traces', dataset_names, datasets)
             for name, value in attrs_trace_data.items():
                 self.file['/'.join((tracedir, dataset_names[0]))].attrs[name] = value
-            self.file.close()
+            self.close_file()
             self.set_data()
         else:
             return 'Wrong directory inside .hdf5 file! Select the Group where the traces are stored and try again ...'
@@ -1512,10 +1571,10 @@ class HDF5Data:
             print(f"Error: {e}")
 
     def reset(self):
+        self.close_file()
         self.readpath = None
         self.shape_data = None
         self.shape_trace = None
-        self.file = None
         self.file_name = None
         self.arrays = None
         self.array_tags = None

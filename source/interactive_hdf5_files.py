@@ -64,6 +64,27 @@ DEFAULT_APPLICATION_PREFERENCES = {
 }
 
 
+def unregister_array_plotter(plotter):
+    """Remove a closed plotter from the application's ownership registry."""
+    try:
+        array_plotters.remove(plotter)
+    except ValueError:
+        pass
+
+
+def close_all_array_plotters():
+    """Close every owned plotter and discard stale plotter references."""
+    for plotter in list(array_plotters):
+        try:
+            plotter.close()
+        except (AttributeError, tk.TclError):
+            try:
+                plotter.root.destroy()
+            except (AttributeError, tk.TclError):
+                pass
+    array_plotters.clear()
+
+
 def set_application_icon(window):
     """Set the application icon in both source and installed layouts."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1696,7 +1717,7 @@ def add_traces_window(hdf5Data, parent=None):
     traces_hdf5Data.set_path(pth, 'r')
     
     # open treeview window
-    traces_selection_window = ttk.Toplevel()
+    traces_selection_window = ttk.Toplevel(parent)
     traces_selection_window.title('Add Traces from HDF5 File')
         
     #add an entry for the group name in the destination file
@@ -1716,6 +1737,15 @@ def add_traces_window(hdf5Data, parent=None):
     )
     if source_opener is not None:
         source_opener(pth)
+
+    def close_traces_selection_window():
+        traces_hdf5Data.close_file()
+        traces_selection_window.destroy()
+
+    traces_selection_window.protocol(
+        'WM_DELETE_WINDOW',
+        close_traces_selection_window,
+    )
 
     def copy_selected_dataset():
         """
@@ -2100,6 +2130,7 @@ def plot_array(hdf5Data, root):
         plot_style_change_callback=lambda selected_style: (
             change_application_plot_style(root, selected_style)
         ),
+        close_callback=unregister_array_plotter,
     )
     array_plotters.append(plotter)
 
@@ -2119,6 +2150,7 @@ def plot_array_with_trace_data(hdf5Data, root):
         plot_style_change_callback=lambda selected_style: (
             change_application_plot_style(root, selected_style)
         ),
+        close_callback=unregister_array_plotter,
     )
     array_plotters.append(plotter)
 
@@ -2383,8 +2415,7 @@ def display_hdf5_file(root, hdf5Data):
         working_directory = hdf5Data.wdir
         for item in tree.get_children():
             tree.delete(item)
-        for ploter in array_plotters:
-            ploter.reset()
+        close_all_array_plotters()
         if os.path.exists(hdf5Data.wdir) and os.path.isdir(hdf5Data.wdir):
             for filename in os.listdir(hdf5Data.wdir):
                 file_path = os.path.join(hdf5Data.wdir, filename)
@@ -2427,10 +2458,9 @@ def display_hdf5_file(root, hdf5Data):
         values_above = get_values_above_clicked_node(parent_item, tree)
         file_dir_sep ='/'
         file_dir = file_dir_sep.join(values_above)
-        with hdf5Data.file as file:
-            if isinstance(file[file_dir], h5py.Dataset):
-                for i, list_values in enumerate(file[file_dir]):
-                    tree.insert(parent_item, "end", text=f'{i}', values=(list_values,))
+        if isinstance(hdf5Data.file[file_dir], h5py.Dataset):
+            for i, list_values in enumerate(hdf5Data.file[file_dir]):
+                tree.insert(parent_item, "end", text=f'{i}', values=(list_values,))
 
     def on_double_click(event):
         item = tree.selection()[0]
@@ -2519,6 +2549,14 @@ def main():
                 parent=root,
             )
             return
+        close_all_array_plotters()
+        for browser in list(getattr(root, '_labber_database_browsers', [])):
+            try:
+                browser.close()
+            except (AttributeError, tk.TclError):
+                pass
+        root._labber_database_browsers = []
+        hdf5Data.close_file()
         try:
             if os.path.exists(wdir):
                 shutil.rmtree(wdir)
