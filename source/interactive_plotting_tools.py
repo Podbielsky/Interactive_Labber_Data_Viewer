@@ -60,6 +60,51 @@ rc('pdf', fonttype=42)
 
 
 TRACE_SAMPLE_AXIS_ROLE = 'trace_samples'
+COLOR_SCALE_OFF = 'off'
+COLOR_SCALE_STANDARD_DEVIATIONS = 'standard_deviations'
+COLOR_SCALE_PERCENTILE = 'percentile'
+COLOR_SCALE_FULL_RANGE = 'full_range'
+
+
+def calculate_color_scale_limits(
+    data,
+    mode,
+    standard_deviation_factor=2.5,
+    percentile_tail=1.0,
+):
+    """Calculate finite color limits for one of the automatic scale modes."""
+    values = np.asarray(data)
+    if np.iscomplexobj(values):
+        values = np.abs(values)
+    finite_values = np.asarray(values, dtype=np.float64).ravel()
+    finite_values = finite_values[np.isfinite(finite_values)]
+    if finite_values.size == 0:
+        raise ValueError('Color scaling requires at least one finite value.')
+
+    if mode == COLOR_SCALE_STANDARD_DEVIATIONS:
+        factor = float(standard_deviation_factor)
+        if not np.isfinite(factor) or factor <= 0:
+            raise ValueError('The standard-deviation factor must be positive.')
+        mean = float(np.mean(finite_values))
+        standard_deviation = float(np.std(finite_values))
+        return (
+            mean - factor * standard_deviation,
+            mean + factor * standard_deviation,
+        )
+    if mode == COLOR_SCALE_PERCENTILE:
+        tail = float(percentile_tail)
+        if not np.isfinite(tail) or not 0 <= tail < 50:
+            raise ValueError(
+                'The percentile tail cutoff must be between 0 and 50 percent.'
+            )
+        lower, upper = np.percentile(
+            finite_values,
+            [tail, 100.0 - tail],
+        )
+        return float(lower), float(upper)
+    if mode == COLOR_SCALE_FULL_RANGE:
+        return float(np.min(finite_values)), float(np.max(finite_values))
+    raise ValueError(f'Unsupported automatic color-scale mode: {mode!r}.')
 
 
 def format_hdf5_label(label):
@@ -606,6 +651,7 @@ class InteractiveArrayPlotter:
         self.loaded = False # rename to be more discriptiv
         self.calculated = False
         self.auto_scale_factor = 2.5
+        self.auto_scale_percentile = 1.0
         self.data_operation_history = deque(maxlen=5)
 
         # ROI selection and its lightweight, coalesced canvas preview.
@@ -794,7 +840,10 @@ class InteractiveArrayPlotter:
         self.horizontal_linecut_cursor = None
         self.vertical_linecut_artist = None
         self.vertical_linecut_cursor = None
-        self.auto_scale_var = tk.BooleanVar(value=True)  # Default to True (auto-scaling
+        self.color_scale_mode_var = tk.StringVar(
+            master=self.root,
+            value=COLOR_SCALE_STANDARD_DEVIATIONS,
+        )
         self.crosshair_enabled = False
         self.interpolation_enabled = False
         self.invert_enabled = False
@@ -844,13 +893,24 @@ class InteractiveArrayPlotter:
         # Create a Frame for the "Plot" buttons
         self.button_frame = ttk.Frame(self.root)
         self.frame2.pack(side=tk.RIGHT, padx=5, pady=5)
-
-        self.auto_scale_check = ttk.Checkbutton(
+        self.color_scale_frame = ttk.LabelFrame(
             self.frame2,
-            text="Auto-scale plot bounds",
-            variable=self.auto_scale_var
+            text='Color scaling',
         )
-        self.auto_scale_check.pack(side=tk.TOP, pady=2)
+        self.color_scale_frame.pack(side=tk.TOP, fill=tk.X, pady=2)
+        for label, mode in (
+            ('Off', COLOR_SCALE_OFF),
+            ('Standard deviations', COLOR_SCALE_STANDARD_DEVIATIONS),
+            ('Percentile', COLOR_SCALE_PERCENTILE),
+            ('Full range', COLOR_SCALE_FULL_RANGE),
+        ):
+            ttk.Radiobutton(
+                self.color_scale_frame,
+                text=label,
+                variable=self.color_scale_mode_var,
+                value=mode,
+                command=self._on_color_scale_mode_changed,
+            ).pack(anchor=tk.W, padx=4)
 
         self.fast_crosshair_checkbutton = ttk.Checkbutton(
             self.frame2,
@@ -1669,6 +1729,12 @@ class InteractiveArrayPlotter:
             'vmin': getattr(self, 'vmin', None),
             'vmax': getattr(self, 'vmax', None),
             'auto_scale_factor': getattr(self, 'auto_scale_factor', None),
+            'auto_scale_percentile': getattr(
+                self,
+                'auto_scale_percentile',
+                1.0,
+            ),
+            'color_scale_mode': self.color_scale_mode_var.get(),
         }
 
     @contextmanager
@@ -1722,6 +1788,8 @@ class InteractiveArrayPlotter:
         self.vmin = state['vmin']
         self.vmax = state['vmax']
         self.auto_scale_factor = state['auto_scale_factor']
+        self.auto_scale_percentile = state['auto_scale_percentile']
+        self.color_scale_mode_var.set(state['color_scale_mode'])
         self.invert_enabled = False
 
         row_count, column_count = self.sliced_data.shape[:2]
@@ -2464,10 +2532,15 @@ class InteractiveArrayPlotter:
 
     def init_movable_lines(self):
         # Initial positions for vmin and vmax lines
-        if self.auto_scale_var.get() or self.vmin is None or self.vmax is None:
+        if self._automatic_color_scaling_enabled():
             self.apply_auto_scaling()
             vmin_initial = self.vmin
             vmax_initial = self.vmax
+        elif self.vmin is None or self.vmax is None:
+            vmin_initial, vmax_initial = calculate_color_scale_limits(
+                self.sliced_data,
+                COLOR_SCALE_FULL_RANGE,
+            )
         else:
             vmin_initial = self.vmin
             vmax_initial = self.vmax
@@ -2495,6 +2568,7 @@ class InteractiveArrayPlotter:
     def on_drag(self, event):
         # Drag the line
         if event.inaxes == self.histogram_ax and self.picked_line is not None:
+            self.color_scale_mode_var.set(COLOR_SCALE_OFF)
             self.picked_line.set_xdata(event.xdata)
             self.histogram_canvas.draw_idle()
 
@@ -2897,7 +2971,7 @@ class InteractiveArrayPlotter:
 
         with self.data_operation(operation_name):
             self.sliced_data = filtered_data
-            if self.auto_scale_var.get():
+            if self._automatic_color_scaling_enabled():
                 self.apply_auto_scaling()
 
         self.update_histogramm()
@@ -2907,7 +2981,7 @@ class InteractiveArrayPlotter:
         self.data_axis_transform_window = ttk.Toplevel(self.root)
         self.use_trace_wise_min_max_scaling_var = tk.BooleanVar(value=False)
         self.data_axis_transform_window.title("Axis Scaling and Renaming")
-        self.data_axis_transform_window.geometry("400x240")
+        self.data_axis_transform_window.geometry("460x300")
 
         self.data_axis_transform_naming_frame = ttk.Frame(self.data_axis_transform_window)
         self.data_axis_transform_scaling_frame = ttk.Frame(self.data_axis_transform_window)
@@ -2936,10 +3010,26 @@ class InteractiveArrayPlotter:
         self.z_axis_scale_input.pack()
         self.z_axis_scale_input.insert(0, '1.0')
 
-        ttk.Label(self.data_axis_transform_scaling_frame, text="Auto Scale Factor:").pack()
+        ttk.Label(
+            self.data_axis_transform_scaling_frame,
+            text="Std. deviation factor (±σ):",
+        ).pack()
         self.auto_scale_factor_input = ttk.Entry(self.data_axis_transform_scaling_frame)
         self.auto_scale_factor_input.pack()
         self.auto_scale_factor_input.insert(0, str(self.auto_scale_factor))
+
+        ttk.Label(
+            self.data_axis_transform_scaling_frame,
+            text="Percentile tail cutoff (%):",
+        ).pack()
+        self.auto_scale_percentile_input = ttk.Entry(
+            self.data_axis_transform_scaling_frame
+        )
+        self.auto_scale_percentile_input.pack()
+        self.auto_scale_percentile_input.insert(
+            0,
+            str(self.auto_scale_percentile),
+        )
 
         self.use_trace_wise_min_max_scaling_check = ttk.Checkbutton(
             self.data_axis_transform_window,
@@ -3331,10 +3421,36 @@ class InteractiveArrayPlotter:
         name_data_x_axis = str(self.x_axis_name_input.get())
         name_data_y_axis = str(self.y_axis_name_input.get())
         name_data_z = str(self.z_axis_name_input.get())
-        auto_scale_factor = np.float64(self.auto_scale_factor_input.get())
-        transformed_x = self.X * np.float64(self.x_axis_scale_input.get())
-        transformed_y = self.Y * np.float64(self.y_axis_scale_input.get())
-        transformed_data = self.sliced_data * np.float64(self.z_axis_scale_input.get())
+        try:
+            auto_scale_factor = float(self.auto_scale_factor_input.get())
+            auto_scale_percentile = float(
+                self.auto_scale_percentile_input.get()
+            )
+            x_scale = float(self.x_axis_scale_input.get())
+            y_scale = float(self.y_axis_scale_input.get())
+            z_scale = float(self.z_axis_scale_input.get())
+            if not np.isfinite(auto_scale_factor) or auto_scale_factor <= 0:
+                raise ValueError(
+                    'The standard-deviation factor must be positive.'
+                )
+            if (
+                not np.isfinite(auto_scale_percentile)
+                or not 0 <= auto_scale_percentile < 50
+            ):
+                raise ValueError(
+                    'The percentile tail cutoff must be between 0 and 50.'
+                )
+        except ValueError as error:
+            messagebox.showerror(
+                'Invalid Scaling Settings',
+                str(error) or 'All scaling values must be numeric.',
+                parent=self.data_axis_transform_window,
+            )
+            return
+
+        transformed_x = self.X * x_scale
+        transformed_y = self.Y * y_scale
+        transformed_data = self.sliced_data * z_scale
         if self.use_trace_wise_min_max_scaling_var.get():
             transformed_data = trace_wise_min_max_scaling(transformed_data)
 
@@ -3343,12 +3459,13 @@ class InteractiveArrayPlotter:
             self.name_data_y_axis = name_data_y_axis
             self.name_data_z = name_data_z
             self.auto_scale_factor = auto_scale_factor
+            self.auto_scale_percentile = auto_scale_percentile
             self.X = transformed_x
             self.Y = transformed_y
             self.sliced_data = transformed_data
             self.xlim = [np.min(self.X), np.max(self.X)]
             self.ylim = [np.min(self.Y), np.max(self.Y)]
-            if self.auto_scale_var.get():
+            if self._automatic_color_scaling_enabled():
                 self.apply_auto_scaling()
 
         self.update_histogramm()
@@ -3390,7 +3507,7 @@ class InteractiveArrayPlotter:
         corrected_data = self.sliced_data - bg
         with self.data_operation('Polynomial background subtraction'):
             self.sliced_data = corrected_data
-            if self.auto_scale_var.get():
+            if self._automatic_color_scaling_enabled():
                 self.apply_auto_scaling()
 
         self.update_histogramm()
@@ -3400,7 +3517,7 @@ class InteractiveArrayPlotter:
         corrected_data = correct_median_diff(self.sliced_data)
         with self.data_operation('Median-difference correction'):
             self.sliced_data = corrected_data
-            if self.auto_scale_var.get():
+            if self._automatic_color_scaling_enabled():
                 self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
@@ -3409,7 +3526,7 @@ class InteractiveArrayPlotter:
         corrected_data = correct_mean_of_lines(self.sliced_data)
         with self.data_operation('Mean-of-lines correction'):
             self.sliced_data = corrected_data
-            if self.auto_scale_var.get():
+            if self._automatic_color_scaling_enabled():
                 self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
@@ -3423,15 +3540,36 @@ class InteractiveArrayPlotter:
 
         with self.data_operation('Relation-parameter correction'):
             self.sliced_data = corrected_data
-            if self.auto_scale_var.get():
+            if self._automatic_color_scaling_enabled():
                 self.apply_auto_scaling()
 
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
 
+    def _automatic_color_scaling_enabled(self):
+        """Return whether a data-driven color scaling mode is selected."""
+        return self.color_scale_mode_var.get() != COLOR_SCALE_OFF
+
     def apply_auto_scaling(self):
-        self.vmin = np.mean(self.sliced_data) - self.auto_scale_factor * np.std(self.sliced_data)
-        self.vmax = np.mean(self.sliced_data) + self.auto_scale_factor * np.std(self.sliced_data)
+        """Apply the selected automatic color scaling mode to displayed data."""
+        mode = self.color_scale_mode_var.get()
+        if mode == COLOR_SCALE_OFF:
+            return False
+        self.vmin, self.vmax = calculate_color_scale_limits(
+            self.sliced_data,
+            mode,
+            standard_deviation_factor=self.auto_scale_factor,
+            percentile_tail=self.auto_scale_percentile,
+        )
+        return True
+
+    def _on_color_scale_mode_changed(self):
+        """Apply a newly selected color scaling mode immediately."""
+        if getattr(self, 'sliced_data', None) is None:
+            return
+        self.apply_auto_scaling()
+        self.update_histogramm()
+        self.update_pcolormesh(self.vmin, self.vmax)
 
     def apply_subtract_trace_average(self):
         # Extract parameters from input fields
@@ -3456,7 +3594,7 @@ class InteractiveArrayPlotter:
         )
         with self.data_operation('Subtract trace average'):
             self.sliced_data = corrected_data
-            if self.auto_scale_var.get():
+            if self._automatic_color_scaling_enabled():
                 self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
@@ -3479,7 +3617,7 @@ class InteractiveArrayPlotter:
         )[self.axis_selection.index(self.derivative_combobox.get())]
         with self.data_operation('Derivative'):
             self.sliced_data = derivative_data
-            if self.auto_scale_var.get():
+            if self._automatic_color_scaling_enabled():
                 self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
@@ -3493,7 +3631,7 @@ class InteractiveArrayPlotter:
                                 + np.gradient(self.sliced_data, dx, dy)[1] ** 2)
         with self.data_operation('Norm of gradient'):
             self.sliced_data = gradient_data
-            if self.auto_scale_var.get():
+            if self._automatic_color_scaling_enabled():
                 self.apply_auto_scaling()
         self.update_histogramm()
         self.update_pcolormesh(self.vmin, self.vmax)
@@ -3530,7 +3668,7 @@ class InteractiveArrayPlotter:
                 if result[2].size > 0:
                     with self.data_operation('ROI cut'):
                         self.X, self.Y, self.sliced_data = result
-                        if self.auto_scale_var.get():
+                        if self._automatic_color_scaling_enabled():
                             self.apply_auto_scaling()
                         self.xlim = (np.min(self.X), np.max(self.X))
                         self.ylim = (np.min(self.Y), np.max(self.Y))

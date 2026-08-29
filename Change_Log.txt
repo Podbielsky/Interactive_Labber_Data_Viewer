@@ -152,3 +152,7 @@ change in v0.4.8
   Traces, as well as amplitudes stored in child groups below Traces
 - pair each amplitude with its matching *_N and *_t0dt metadata and keep its
   X axis, plotting, analysis, fitting, and export isolated when switching
+- replace the automatic-scaling checkbox with Off, Standard deviations,
+  Percentile, and Full range color-scaling radio buttons
+- add a configurable symmetric percentile tail cutoff beside the existing
+  standard-deviation factor and preserve manual histogram limits in Off mode

@@ -274,6 +274,15 @@ Re-arranging multidimensional scan axes
 
 Map rendering, crosshairs, and numerical precision
 -->
+- The Color scaling controls to the right of the map provide four modes: Off
+  retains manually selected histogram limits, Standard deviations uses the
+  mean plus/minus the configured number of standard deviations, Percentile
+  clips the configured percentage from each tail, and Full range uses the
+  finite minimum and maximum. Selecting a mode applies it immediately.
+- The standard-deviation factor and percentile tail cutoff are configured in
+  Displayed Data > Rename and Scale Data and Axis. For example, a percentile
+  cutoff of 1 displays the 1st through 99th percentile. Dragging either limit
+  line in the histogram automatically changes Color scaling to Off.
 - The map viewer retains the active X, Y, and signal calculation arrays at
   float64 precision. Filters, derivatives, integrations, linecut extraction,
   ROI operations, undo states, and displayed-data exports use these full-
