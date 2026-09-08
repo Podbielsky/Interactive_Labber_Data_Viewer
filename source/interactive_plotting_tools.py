@@ -65,6 +65,52 @@ COLOR_SCALE_PERCENTILE = 'percentile'
 COLOR_SCALE_FULL_RANGE = 'full_range'
 
 
+def build_displayed_npz_payload(axis_names, arrays):
+    """Return three safely named NPZ fields for displayed X, Y, and Z data."""
+    if len(axis_names) != 3 or len(arrays) != 3:
+        raise ValueError('A displayed-data NPZ export requires X, Y, and Z.')
+
+    payload = {}
+    used_names = set()
+    for role, label, array in zip(('x', 'y', 'z'), axis_names, arrays):
+        field_name = str(label).strip() if label is not None else ''
+        if not field_name:
+            field_name = role
+
+        # NPZ keys become filenames inside the ZIP archive.  Keep readable
+        # scientific labels while removing path separators and NUL characters.
+        field_name = (
+            field_name.replace('\x00', '')
+            .replace('/', '_')
+            .replace('\\', '_')
+            .strip()
+        ) or role
+        if field_name == 'file':
+            # ``file`` is the first parameter of numpy.savez and cannot also be
+            # supplied as a named array through **payload.
+            field_name = f'{field_name} [{role.upper()}]'
+
+        unique_name = field_name
+        suffix_number = 1
+        while unique_name in used_names:
+            suffix = f' [{role.upper()}]'
+            if suffix_number > 1:
+                suffix += f' {suffix_number}'
+            unique_name = field_name + suffix
+            suffix_number += 1
+
+        value = np.asarray(array)
+        if value.dtype.hasobject:
+            raise ValueError(
+                f'The displayed {role.upper()} array has an object dtype and '
+                'cannot be saved as a pickle-free NPZ field.'
+            )
+        payload[unique_name] = value
+        used_names.add(unique_name)
+
+    return payload
+
+
 def calculate_color_scale_limits(
     data,
     mode,
@@ -689,6 +735,10 @@ class InteractiveArrayPlotter:
         self.file_menu.add_separator()
         self.file_menu.add_command(label="Save whole data as NumPy array", command=self.save_file)
         self.file_menu.add_command(label="Save displayed data as NumPy array", command=self.save_data)
+        self.file_menu.add_command(
+            label="Save displayed data as NPZ file",
+            command=self.save_data_as_npz,
+        )
         self.file_menu.add_separator()
         self.file_menu.add_command(label="Exit", command=self.close)
         self.menubar.add_cascade(label="File", menu=self.file_menu)
@@ -4653,6 +4703,49 @@ class InteractiveArrayPlotter:
         data_and_axis = [self.X, self.Y, self.sliced_data]
         np.save(pth + base_name + 'displayed_tags_.npy', names_axis, allow_pickle=True)
         np.save(pth + 'displayed_data_array_.npy', data_and_axis, allow_pickle=True)
+
+    def save_data_as_npz(self):
+        """Save the active full-resolution X/Y/Z plane in one named archive."""
+        self.data.set_filename()
+        base_name, _extension = os.path.splitext(self.data.file_name)
+        dialog_options = {
+            'parent': self.root,
+            'title': 'Save Displayed Data as NPZ',
+            'defaultextension': '.npz',
+            'filetypes': [('NumPy archives', '*.npz')],
+            'initialfile': f'{base_name}_displayed_data.npz',
+        }
+        source_path = getattr(self.data, 'readpath', None)
+        if source_path:
+            dialog_options['initialdir'] = os.path.dirname(source_path)
+        save_path = filedialog.asksaveasfilename(
+            **dialog_options,
+        )
+        if not save_path:
+            return None
+        if not save_path.lower().endswith('.npz'):
+            save_path += '.npz'
+
+        try:
+            payload = build_displayed_npz_payload(
+                (
+                    self.name_data_x_axis,
+                    self.name_data_y_axis,
+                    self.name_data_z,
+                ),
+                (self.X, self.Y, self.sliced_data),
+            )
+            # Uncompressed NPZ avoids a long compression pause for large maps.
+            # The three fields remain standard .npy members of one ZIP archive.
+            np.savez(save_path, **payload)
+        except (OSError, TypeError, ValueError) as error:
+            messagebox.showerror(
+                'NPZ Export Failed',
+                str(error),
+                parent=self.root,
+            )
+            return None
+        return save_path
 
     def save_file(self):
         pth = filedialog.askdirectory() + '/'

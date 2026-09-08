@@ -156,3 +156,6 @@ change in v0.4.8
   Percentile, and Full range color-scaling radio buttons
 - add a configurable symmetric percentile tail cutoff beside the existing
   standard-deviation factor and preserve manual histogram limits in Off mode
+- added a single-file NPZ export for the active full-resolution displayed map,
+  storing X, Y, and Z under their current axis and data labels for direct
+  drag-and-drop conversion back into the viewer

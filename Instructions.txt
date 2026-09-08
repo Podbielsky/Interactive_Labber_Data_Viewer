@@ -132,6 +132,18 @@ Changing the interface style
 
 Opening HDF5 and NPZ files with drag and drop
 -->
+- In an open map plotter, choose File > Save displayed data as NPZ file to
+  export the active full-resolution X coordinate, Y coordinate, and displayed
+  data plane into one .npz archive. The three NPZ field names are taken from
+  the current X-axis, Y-axis, and data labels, including names changed through
+  axis rearrangement or Rename and Scale Data and Axis.
+- NPZ export saves the authoritative calculation arrays rather than the
+  downsampled float32 rendering arrays. Active ROI cuts, filters, derivatives,
+  integrations, scaling operations, and the currently selected additional-axis
+  position are therefore represented exactly as they appear in the plotter.
+- Exported archives contain exactly three pickle-free NumPy arrays and can be
+  dropped back onto the file tree. The normal X/Y/Z assignment window opens so
+  the named fields can be confirmed before creating a new HDF5 file.
 - Drag one .hdf5, .h5, or .npz file from the file manager onto the HDF5 file
   tree.
 - The viewer validates and opens a dropped HDF5 file immediately.
