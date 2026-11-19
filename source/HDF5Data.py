@@ -2,6 +2,7 @@ import h5py
 import math
 import numpy as np
 import os
+import warnings
 from dataclasses import dataclass
 
 
@@ -27,6 +28,55 @@ class HDF5TraceChannel:
     dataset_path: str
     sample_count: int
     trace_count: int
+
+
+def find_effective_line_axis(coordinate_arrays, step_dimensions):
+    """Return the varying coordinate index for an effectively 1-D scan.
+
+    Labber files can describe a line scan in two ways: with one coordinate
+    channel, or with a second, constant coordinate channel and a singleton
+    scan dimension.  The NPZ converter uses the latter representation for a
+    missing Y field.  Treat both layouts as line scans, while keeping genuine
+    maps (two or more non-singleton scan dimensions) two-dimensional.
+    """
+    coordinate_arrays = (
+        [] if coordinate_arrays is None else list(coordinate_arrays)
+    )
+    if step_dimensions is None:
+        return None
+    dimensions = tuple(int(value) for value in np.ravel(step_dimensions))
+    if not coordinate_arrays or not dimensions:
+        return None
+    if sum(dimension > 1 for dimension in dimensions) > 1:
+        return None
+    if len(coordinate_arrays) == 1:
+        return 0
+
+    varying_axes = []
+    for axis_index, coordinate_array in enumerate(coordinate_arrays):
+        values = np.asarray(coordinate_array)
+        if (
+            values.size == 0
+            or values.dtype.kind not in 'biuf'
+            or np.iscomplexobj(values)
+        ):
+            continue
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            minimum = np.nanmin(values)
+            maximum = np.nanmax(values)
+        if (
+            np.isfinite(minimum)
+            and np.isfinite(maximum)
+            and maximum != minimum
+        ):
+            varying_axes.append(axis_index)
+
+    if len(varying_axes) == 1:
+        return varying_axes[0]
+    if not varying_axes and math.prod(dimensions) == 1:
+        return 0
+    return None
 
 
 def _decode_hdf5_text(value):
@@ -574,16 +624,25 @@ def load_hdf5_map_preview(path, maximum_points_per_axis=None):
         z_grid = read_preview_channel(z_index)
 
         axis_names = metadata['axis_names']
-        is_linecut = len(axis_names) == 1
-        x_label = axis_names[0]
-        x_index = channel_names.index(x_label)
-        if maximum_points_per_axis is None or is_linecut:
-            x_grid = read_preview_channel(x_index)
-        else:
-            x_grid = read_coordinate_grid(x_index, 'x')
+        possibly_one_dimensional = (
+            sum(dimension > 1 for dimension in step_dimensions) <= 1
+        )
+        preview_axis_grids = None
+        line_axis_index = None
+        if possibly_one_dimensional:
+            preview_axis_grids = [
+                read_preview_channel(channel_names.index(axis_name))
+                for axis_name in axis_names
+            ]
+            line_axis_index = find_effective_line_axis(
+                preview_axis_grids,
+                step_dimensions,
+            )
 
+        is_linecut = line_axis_index is not None
         if is_linecut:
-            line_x = np.ravel(x_grid)
+            x_label = axis_names[line_axis_index]
+            line_x = np.ravel(preview_axis_grids[line_axis_index])
             line_z = np.ravel(z_grid)
             valid_points = np.isfinite(line_x)
             line_x = line_x[valid_points]
@@ -598,6 +657,17 @@ def load_hdf5_map_preview(path, maximum_points_per_axis=None):
             z_grid = np.tile(line_z, (3, 1))
             y_label = 'y-dummy'
         else:
+            if len(axis_names) < 2:
+                raise ValueError(
+                    'A measurement with only one coordinate channel must have '
+                    'at most one non-singleton scan dimension.'
+                )
+            x_label = axis_names[0]
+            x_index = channel_names.index(x_label)
+            if maximum_points_per_axis is None:
+                x_grid = read_preview_channel(x_index)
+            else:
+                x_grid = read_coordinate_grid(x_index, 'x')
             y_label = axis_names[1]
             y_index = channel_names.index(y_label)
             if maximum_points_per_axis is None:

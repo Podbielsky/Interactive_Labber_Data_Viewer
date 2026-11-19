@@ -47,6 +47,7 @@ from plot_style import (
     open_plot_style_dialog,
     resolve_plot_color,
 )
+from HDF5Data import find_effective_line_axis
 neon_cmap = make_neon_cyclic_colormap()
 bi_map = make_bi_colormap() # take out
 half_red_map = make_half_red_map()
@@ -660,18 +661,34 @@ class InteractiveArrayPlotter:
         )
         if measurement_axis_count == 0:
             raise ValueError('The measurement does not contain a sweep axis.')
-        if len(self.data.measure_dim) != measurement_axis_count:
-            raise ValueError(
-                'The number of scan-axis arrays does not match the scan shape.'
-            )
-        self.scan_axis_count = measurement_axis_count
-        self.scan_shape = tuple(
-            int(dimension) for dimension in reversed(self.data.measure_dim)
+        self.single_axis_source_index = find_effective_line_axis(
+            self.data.measure_axis,
+            self.data.measure_dim,
         )
-        self.scan_axis_names = [
-            format_hdf5_label(axis_name)
-            for axis_name in reversed(self.data.name_axis)
-        ]
+        self.single_axis_measurement = (
+            self.single_axis_source_index is not None
+        )
+        if self.single_axis_measurement:
+            self.scan_axis_count = 1
+            self.scan_shape = (int(np.prod(self.data.measure_dim)),)
+            self.scan_axis_names = [
+                format_hdf5_label(
+                    self.data.name_axis[self.single_axis_source_index]
+                )
+            ]
+        else:
+            if len(self.data.measure_dim) != measurement_axis_count:
+                raise ValueError(
+                    'The number of scan-axis arrays does not match the scan shape.'
+                )
+            self.scan_axis_count = measurement_axis_count
+            self.scan_shape = tuple(
+                int(dimension) for dimension in reversed(self.data.measure_dim)
+            )
+            self.scan_axis_names = [
+                format_hdf5_label(axis_name)
+                for axis_name in reversed(self.data.name_axis)
+            ]
         self.x_scan_axis_index = self.scan_axis_count - 1
         self.y_scan_axis_index = (
             self.scan_axis_count - 2
@@ -686,7 +703,6 @@ class InteractiveArrayPlotter:
                 self.y_scan_axis_index,
             )
         ]
-        self.single_axis_measurement = measurement_axis_count == 1
         self.num_dimensions = len(self.additional_scan_axis_indices)
         print(self.num_dimensions)
         self.name_data = [
@@ -1901,7 +1917,9 @@ class InteractiveArrayPlotter:
             self.xlim = (np.nanmin(self.X), np.nanmax(self.X))
             self.ylim = (np.nanmin(self.Y), np.nanmax(self.Y))
         elif self.single_axis_measurement:
-            x_values = np.ravel(self.data.measure_axis[0])
+            x_values = np.ravel(
+                self.data.measure_axis[self.single_axis_source_index]
+            )
             original_data = np.ravel(
                 self.data.measure_data[
                     self.name_data.index(self.data_combobox.get())
@@ -1913,18 +1931,15 @@ class InteractiveArrayPlotter:
             self.nan_mask = np.isfinite(x_values)
             x_values = x_values[self.nan_mask]
 
-            # Create X as a 2D array with each x-value repeated twice
-            # Each row will have identical x-values: [[x1, x1], [x2, x2], ...]
+            # Repeat the line across three rows to give pcolormesh a visible
+            # synthetic map without changing the measured values.
             self.X = np.swapaxes(np.repeat(x_values[:, np.newaxis], 3, axis=1), 0, 1)
 
-            # Create Y with two different values for each X position
-            # This creates two rows in the 2D plot
+            # The synthetic Y coordinates exist only to provide map height.
             y_values = np.array([0, 1, 2], dtype=float)
             self.Y = np.swapaxes(np.tile(y_values, (len(x_values), 1)), 0, 1)
 
-            # Handle sliced_data: Repeat each value twice to match X and Y dimensions
             filtered_data = original_data[self.nan_mask]
-            # Repeat each value to create a 2D array with identical values in each row
             self.sliced_data = np.swapaxes(np.repeat(filtered_data[:, np.newaxis], 3, axis=1), 0, 1)
 
             self.ax.clear()
@@ -1932,7 +1947,9 @@ class InteractiveArrayPlotter:
             self.ylim = (np.min(self.Y), np.max(self.Y))
 
             self.name_data_z = self.data_combobox.get()
-            self.name_data_x_axis = str(self.data.name_axis[0])
+            self.name_data_x_axis = format_hdf5_label(
+                self.data.name_axis[self.single_axis_source_index]
+            )
             self.name_data_y_axis = 'y-dummy'
         else:
             self.X = self._slice_current_scan_grid(
